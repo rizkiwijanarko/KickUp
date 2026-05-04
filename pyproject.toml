@@ -22,27 +22,15 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    # Core framework
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
-    # LLM clients
-    "openai>=1.0.0",
     "langchain-openai>=0.2.0",
-    # UI
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
     "gradio>=5.0.0",
-    # Data & ML
-    "chromadb>=0.5.0",
-    "sentence-transformers>=3.0.0",
-    "hdbscan>=0.8.0",
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    # APIs & scraping
     "praw>=7.7.0",
     "requests>=2.31.0",
-    "crawl4ai>=0.3.0",
-    "pytrends>=0.1.0",
-    # Utils
-    "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
     "diskcache>=5.6.0",

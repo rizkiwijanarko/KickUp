@@ -1,12 +1,13 @@
-# src/state/schema.py
 """
-VentureForge Shared State Schema
-=================================
-Single source of truth for all data passed between agents.
-All agents read from and write to an instance of VentureForgeState.
+VentureForge State Schema
+=========================
+Single source of truth for all data passed between agents in the
+LangGraph orchestration layer.
 
-Usage:
-    from src.state.schema import VentureForgeState, PainPoint, CandidateIdea
+All agents read from and write to VentureForgeState instances.
+Updates are immutable: agents never mutate state in place. Instead,
+they return dict patches that the graph layer merges into a new
+copy of the state via model_copy(update=...).
 
 Pydantic v2 is required:
     pip install pydantic>=2.0
@@ -14,647 +15,492 @@ Pydantic v2 is required:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
-
-# ==============================================================================
+# =============================================================================
 # ENUMS
-# ==============================================================================
+# =============================================================================
+
 
 class DataSource(str, Enum):
-    GOOGLE_TRENDS   = "google_trends"
-    HACKERNEWS      = "hackernews"
-    REDDIT          = "reddit"
-    WEB_SEARCH      = "web_search"
-    GITHUB          = "github"
-    PRODUCTHUNT     = "producthunt"
-    YC              = "yc"
-    SEC_EDGAR       = "sec_edgar"
-    WIKIPEDIA       = "wikipedia"
-    CENSUS          = "census"
-    CRAWL4AI        = "crawl4ai"
-    OPENVC          = "openvc"
+    """Where a pain point or piece of evidence originated."""
+
+    REDDIT = "reddit"
+    HACKERNEWS = "hackernews"
 
 
-class CompanyStage(str, Enum):
-    OPEN_SOURCE     = "open_source"
-    INDIE           = "indie"
-    SEED            = "seed"
-    SERIES_A_PLUS   = "series_a_plus"
-    PUBLIC          = "public"
+class Verdict(str, Enum):
+    """Final recommendation from the Scorer."""
 
-
-class MarketSizeFit(str, Enum):
-    TOO_SMALL       = "too_small"
-    NICHE           = "niche"
-    SWEET_SPOT      = "sweet_spot"
-    TOO_BROAD       = "too_broad"
-
-
-class RevenueModel(str, Enum):
-    SUBSCRIPTION    = "subscription"
-    USAGE_BASED     = "usage_based"
-    MARKETPLACE     = "marketplace"
-    FREEMIUM        = "freemium"
-    ONE_TIME        = "one_time"
-    ADS             = "ads"
-
-
-class RiskType(str, Enum):
-    LEGAL           = "legal"
-    FINANCIAL       = "financial"
-    OPERATIONAL     = "operational"
-    COMPETITIVE     = "competitive"
-    TECHNICAL       = "technical"
-
-
-class Severity(str, Enum):
-    LOW             = "low"
-    MEDIUM          = "medium"
-    HIGH            = "high"
-
-
-class IdeaVerdict(str, Enum):
-    PURSUE          = "pursue"
-    EXPLORE         = "explore"
-    PARK            = "park"
-    KILL            = "kill"
+    PURSUE = "pursue"
+    EXPLORE = "explore"
+    PARK = "park"
 
 
 class CriticStatus(str, Enum):
-    APPROVED        = "approved"
-    REVISE          = "revise"
-    REJECT          = "reject"
+    """Outcome of a Critic review."""
+
+    APPROVED = "approved"
+    REVISE = "revise"
+    REJECT = "reject"
 
 
-class IssueType(str, Enum):
-    HALLUCINATION   = "hallucination"
-    WEAK_EVIDENCE   = "weak_evidence"
-    LOGICAL_GAP     = "logical_gap"
-    MARKET_MISMATCH = "market_mismatch"
-    TONE            = "tone"
+class TargetAgent(str, Enum):
+    """Which worker the reflection loop should send the revision to."""
+
+    PAIN_POINT_MINER = "pain_point_miner"
+    IDEA_GENERATOR = "idea_generator"
+    PITCH_WRITER = "pitch_writer"
 
 
-class MarketConfidence(str, Enum):
-    LOW             = "low"
-    MEDIUM          = "medium"
-    HIGH            = "high"
+class PipelineStage(str, Enum):
+    """Current stage of the pipeline."""
+
+    IDLE = "idle"
+    MINING = "mining"
+    GENERATING = "generating"
+    SCORING = "scoring"
+    WRITING = "writing"
+    CRITIQUING = "critiquing"
+    REVISING = "revising"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
-class PipelineStatus(str, Enum):
-    SUCCESS         = "success"
-    PARTIAL         = "partial"
-    FAILED          = "failed"
+# =============================================================================
+# RUBRIC MODELS (binary booleans — all checks are True/False)
+# =============================================================================
 
 
-# ==============================================================================
-# USER INPUT
-# ==============================================================================
+class PainPointRubric(BaseModel):
+    """Binary rubric applied by the Pain Point Miner to self-filter output."""
 
-class UserConstraints(BaseModel):
-    """Optional constraints provided by the user at runtime."""
-    budget_usd:         Optional[int]   = Field(None, description="Max startup budget in USD")
-    team_size:          Optional[int]   = Field(None, description="Available team size")
-    geography:          Optional[str]   = Field(None, description="Target geography e.g. 'US', 'global'")
-    exclude_domains:    list[str]       = Field(default_factory=list, description="Domains to exclude")
-    preferred_revenue:  Optional[RevenueModel] = Field(None, description="Preferred revenue model")
+    is_genuine_current_frustration: bool
+    has_verbatim_quote: bool
+    user_segment_specific: bool
 
-
-class UserInput(BaseModel):
-    """Entry point — provided by the user via CLI or Streamlit UI."""
-    domain:             str             = Field(..., description="Target domain e.g. 'developer tools'")
-    constraints:        UserConstraints = Field(default_factory=UserConstraints)
-    ideas_per_cluster:  int             = Field(default=3, ge=1, le=10)
-    top_n_ideas:        int             = Field(default=5, ge=1, le=20)
-    lookback_days:      int             = Field(default=90, ge=7, le=365)
-    max_posts_per_source: int           = Field(default=100, ge=10, le=500)
+    @computed_field
+    @property
+    def all_pass(self) -> bool:
+        return all(self.model_dump().values())
 
 
-# ==============================================================================
-# DISCOVERY TEAM OUTPUTS
-# ==============================================================================
+class FeasibilityRubric(BaseModel):
+    """Binary checks for feasibility (Scorer)."""
 
-# --- Trend Scanner ---
-
-class Trend(BaseModel):
-    """A single emerging trend identified by the Trend Scanner."""
-    id:             UUID            = Field(default_factory=uuid4)
-    title:          str
-    description:    str
-    momentum_score: float           = Field(ge=0.0, le=1.0)
-    evidence_urls:  list[str]       = Field(default_factory=list)
-    source:         DataSource
-    first_seen:     datetime        = Field(default_factory=datetime.utcnow)
+    can_2_3_person_team_build_mvp_in_6_months: bool
+    uses_only_existing_proven_tech: bool
+    no_special_regulatory_requirements: bool
 
 
-# --- Pain Point Miner ---
+class DemandRubric(BaseModel):
+    """Binary checks for demand (Scorer)."""
+
+    addresses_at_least_2_pain_points: bool
+    pain_points_show_high_severity: bool
+    target_user_clearly_defined: bool
+
+
+class NoveltyRubric(BaseModel):
+    """Binary checks for novelty (Scorer)."""
+
+    differentiated_from_obvious_solutions: bool
+    leverages_unique_insight: bool
+
+
+class CriticRubric(BaseModel):
+    """Binary checks applied by the Critic to pitch briefs."""
+
+    all_claims_evidence_backed: bool
+    no_hallucinated_source_urls: bool
+    target_user_specific_not_generic: bool
+    honest_risk_disclosure: bool
+    no_buzzword_filler: bool
+    tagline_under_12_words: bool
+    go_to_market_concrete: bool
+
+    @computed_field
+    @property
+    def all_pass(self) -> bool:
+        return all(self.model_dump().values())
+
+    @computed_field
+    @property
+    def failing_checks(self) -> list[str]:
+        return [k for k, v in self.model_dump().items() if not v]
+
+
+# =============================================================================
+# AGENT OUTPUT MODELS
+# =============================================================================
+
 
 class PainPoint(BaseModel):
-    """A single structured user pain point extracted from public discussions."""
-    id:             UUID            = Field(default_factory=uuid4)
-    title:          str
-    description:    str
-    severity:       float           = Field(ge=0.0, le=1.0, description="Emotional intensity 0-1")
-    frequency:      int             = Field(ge=1, description="Number of times mentioned")
-    user_segment:   str             = Field(description="e.g. 'solo developers', 'small business owners'")
-    source_url:     str
-    raw_quote:      str             = Field(description="Exact phrase proving the pain point")
-    source:         DataSource
-    extracted_at:   datetime        = Field(default_factory=datetime.utcnow)
+    """A structured user pain point extracted from Reddit or Hacker News."""
+
+    id: UUID = Field(default_factory=uuid4)
+    title: str = Field(..., min_length=5, max_length=200)
+    description: str = Field(..., min_length=10, max_length=500)
+    rubric: PainPointRubric
+    passes_rubric: bool
+    source_url: str = Field(..., min_length=5)
+    raw_quote: str = Field(..., min_length=5)
+    source: DataSource
 
 
-# --- Market Research Agent ---
+class Idea(BaseModel):
+    """A startup idea generated from clustered pain points."""
 
-class MarketData(BaseModel):
-    """Market sizing and growth data for the target domain."""
-    tam_usd:            Optional[float] = Field(None, description="Total Addressable Market in USD")
-    sam_usd:            Optional[float] = Field(None, description="Serviceable Addressable Market in USD")
-    som_usd:            Optional[float] = Field(None, description="Serviceable Obtainable Market in USD")
-    growth_rate_pct:    Optional[float] = Field(None, description="Annual growth rate %")
-    key_segments:       list[str]       = Field(default_factory=list)
-    key_drivers:        list[str]       = Field(default_factory=list)
-    sources:            list[str]       = Field(default_factory=list)
-    confidence:         MarketConfidence = Field(default=MarketConfidence.LOW)
-    summary:            Optional[str]   = None
-
-
-# --- Competitor Intel Agent ---
-
-class Competitor(BaseModel):
-    """A single competitor or existing solution in the target space."""
-    id:                 UUID            = Field(default_factory=uuid4)
-    name:               str
-    url:                str
-    description:        str
-    category:           str
-    stage:              CompanyStage
-    founded_year:       Optional[int]   = None
-    pricing_model:      Optional[str]   = None
-    differentiators:    list[str]       = Field(default_factory=list)
-    weaknesses:         list[str]       = Field(default_factory=list)
-    source:             DataSource
-
-
-# --- Combined Discovery Results ---
-
-class DiscoveryResults(BaseModel):
-    """Aggregated output of all 4 Discovery Team agents."""
-    trends:         list[Trend]         = Field(default_factory=list)
-    pain_points:    list[PainPoint]     = Field(default_factory=list)
-    market_data:    Optional[MarketData] = None
-    competitors:    list[Competitor]    = Field(default_factory=list)
-    completed_at:   Optional[datetime]  = None
-
-
-# ==============================================================================
-# SYNTHESIS TEAM OUTPUTS
-# ==============================================================================
-
-# --- Clustering Agent ---
-
-class Cluster(BaseModel):
-    """A thematic cluster of related pain points."""
-    cluster_id:     str
-    theme:          str             = Field(description="LLM-generated human-readable label")
-    summary:        str
-    pain_point_ids: list[UUID]      = Field(default_factory=list)
-    size:           int             = Field(ge=1)
-    avg_severity:   float           = Field(ge=0.0, le=1.0)
-    embedding_ids:  list[str]       = Field(default_factory=list, description="ChromaDB doc IDs")
-
-
-# --- Idea Generator ---
-
-class CandidateIdea(BaseModel):
-    """A single startup idea generated from a cluster of pain points."""
-    id:                     UUID        = Field(default_factory=uuid4)
-    title:                  str
-    one_liner:              str
-    problem:                str
-    solution:               str
-    target_user:            str
-    key_features:           list[str]   = Field(default_factory=list)
-    underlying_cluster_id:  str
-    inspiration_trend_ids:  list[UUID]  = Field(default_factory=list)
-    novelty_hypothesis:     str         = Field(description="Why this is different from competitors")
-    generated_at:           datetime    = Field(default_factory=datetime.utcnow)
-    revision_count:         int         = Field(default=0)
-
-
-# --- Combined Synthesis Results ---
-
-class SynthesisResults(BaseModel):
-    """Aggregated output of Clustering Agent + Idea Generator."""
-    clusters:           list[Cluster]       = Field(default_factory=list)
-    candidate_ideas:    list[CandidateIdea] = Field(default_factory=list)
-    completed_at:       Optional[datetime]  = None
-
-
-# ==============================================================================
-# VALIDATION TEAM OUTPUTS
-# ==============================================================================
-
-# --- Feasibility Agent ---
-
-class FeasibilityScore(BaseModel):
-    """Technical, regulatory, and team feasibility assessment for one idea."""
-    idea_id:                    UUID
-    technical_score:            float       = Field(ge=0.0, le=1.0)
-    regulatory_score:           float       = Field(ge=0.0, le=1.0)
-    team_score:                 float       = Field(ge=0.0, le=1.0)
-    overall_score:              float       = Field(ge=0.0, le=1.0)
-    blockers:                   list[str]   = Field(default_factory=list)
-    open_source_components:     list[str]   = Field(default_factory=list)
-    estimated_mvp_months:       int         = Field(ge=1)
-    rationale:                  str
-
-
-# --- Market Validator ---
-
-class ValidationEvidence(BaseModel):
-    """A single piece of evidence supporting market validation."""
-    type:       str     = Field(description="reddit_quote, ph_traction, trend_data, competitor_revenue")
-    snippet:    str
-    source_url: str
-
-
-class MarketValidation(BaseModel):
-    """Demand signals and willingness-to-pay assessment for one idea."""
-    idea_id:                UUID
-    demand_score:           float               = Field(ge=0.0, le=1.0)
-    willingness_to_pay:     float               = Field(ge=0.0, le=1.0)
-    market_size_fit:        MarketSizeFit
-    supporting_evidence:    list[ValidationEvidence] = Field(default_factory=list)
-    rationale:              str
-
-
-# --- Business Model Agent ---
-
-class PricingTier(BaseModel):
-    """A single pricing tier for the product."""
-    name:           str
-    price_usd:      float           = Field(ge=0.0)
-    billing_period: str             = Field(description="monthly, yearly, one-time, per-seat")
-    features:       list[str]       = Field(default_factory=list)
-
-
-class LeanCanvas(BaseModel):
-    """Ash Maurya Lean Canvas for one startup idea."""
-    problem:            str
-    solution:           str
-    key_metrics:        list[str]   = Field(default_factory=list)
-    value_proposition:  str
-    unfair_advantage:   str
-    channels:           list[str]   = Field(default_factory=list)
-    customer_segments:  list[str]   = Field(default_factory=list)
-    cost_structure:     list[str]   = Field(default_factory=list)
-    revenue_streams:    list[str]   = Field(default_factory=list)
-
-
-class BusinessModel(BaseModel):
-    """Revenue model and go-to-market design for one idea."""
-    idea_id:            UUID
-    revenue_model:      RevenueModel
-    pricing_tiers:      list[PricingTier]   = Field(default_factory=list)
-    primary_channels:   list[str]           = Field(default_factory=list)
-    estimated_cac_usd:  Optional[float]     = None
-    estimated_ltv_usd:  Optional[float]     = None
-    lean_canvas:        Optional[LeanCanvas] = None
-
-
-# --- Risk & Scoring Agent ---
-
-class Risk(BaseModel):
-    """A single identified risk for a startup idea."""
-    type:           RiskType
-    description:    str
-    severity:       Severity
-    mitigation:     str
-
-
-class ScoreBreakdown(BaseModel):
-    """Dimension-level scores feeding into the final score."""
-    feasibility:        float   = Field(ge=0.0, le=1.0)
-    market_demand:      float   = Field(ge=0.0, le=1.0)
-    business_viability: float   = Field(ge=0.0, le=1.0)
-    differentiation:    float   = Field(ge=0.0, le=1.0)
-    timing:             float   = Field(ge=0.0, le=1.0)
-
-    @property
-    def weighted_score(self) -> float:
-        """
-        Default weighting:
-            feasibility         20%
-            market_demand       30%
-            business_viability  20%
-            differentiation     20%
-            timing              10%
-        """
-        return round(
-            self.feasibility        * 0.20 +
-            self.market_demand      * 0.30 +
-            self.business_viability * 0.20 +
-            self.differentiation    * 0.20 +
-            self.timing             * 0.10,
-            4
-        )
+    id: UUID = Field(default_factory=uuid4)
+    title: str = Field(..., min_length=3, max_length=100)
+    one_liner: str = Field(..., max_length=120)
+    problem: str = Field(..., min_length=20, max_length=800)
+    solution: str = Field(..., min_length=20, max_length=800)
+    target_user: str = Field(..., min_length=5, max_length=200)
+    key_features: list[str] = Field(default_factory=list, min_length=3, max_length=5)
+    addresses_pain_point_ids: list[UUID] = Field(default_factory=list, min_length=2)
 
 
 class ScoredIdea(BaseModel):
-    """Fully validated and ranked startup idea — output of Risk & Scoring Agent."""
-    idea_id:            UUID
-    idea:               CandidateIdea
-    feasibility:        Optional[FeasibilityScore]  = None
-    validation:         Optional[MarketValidation]  = None
-    business_model:     Optional[BusinessModel]     = None
-    score_breakdown:    Optional[ScoreBreakdown]    = None
-    final_score:        float                       = Field(ge=0.0, le=1.0)
-    risks:              list[Risk]                  = Field(default_factory=list)
-    rank:               Optional[int]               = None
-    verdict:            IdeaVerdict
-    rationale:          str
+    """An idea with binary rubric evaluation applied by the Scorer."""
 
+    idea_id: UUID
+    feasibility_rubric: FeasibilityRubric
+    demand_rubric: DemandRubric
+    novelty_rubric: NoveltyRubric
+    yes_count: int = Field(..., ge=0, le=8)
+    total_checks: int = 8
+    verdict: Verdict
+    verdict_logic: str = Field(
+        default="pursue if yes_count >= 6, explore if 3-5, park if <= 2"
+    )
+    one_risk: str = Field(..., max_length=300)
+    rank: int | None = None
 
-# --- Combined Validation Results ---
-
-class ValidationResults(BaseModel):
-    """Aggregated output of all 4 Validation Team agents."""
-    scored_ideas:   list[ScoredIdea]    = Field(default_factory=list)
-    completed_at:   Optional[datetime]  = None
-
-    @property
-    def ranked(self) -> list[ScoredIdea]:
-        """Return ideas sorted by final_score descending."""
-        return sorted(self.scored_ideas, key=lambda x: x.final_score, reverse=True)
-
-    @property
-    def top_n(self, n: int = 5) -> list[ScoredIdea]:
-        """Return the top N ideas by score."""
-        return self.ranked[:n]
-
-
-# ==============================================================================
-# OUTPUT LAYER
-# ==============================================================================
-
-# --- Pitch Writer ---
-
-class PitchSections(BaseModel):
-    """Individual sections of a pitch brief."""
-    executive_summary:      str
-    problem:                str
-    solution:               str
-    market_opportunity:     str
-    business_model:         str
-    competitive_landscape:  str
-    go_to_market:           str
-    risks_and_mitigations:  str
-    next_steps:             str
+    @model_validator(mode="after")
+    def _derive_verdict(self) -> "ScoredIdea":
+        """Ensure verdict matches yes_count."""
+        if self.yes_count >= 6 and self.verdict != Verdict.PURSUE:
+            self.verdict = Verdict.PURSUE
+        elif 3 <= self.yes_count <= 5 and self.verdict != Verdict.EXPLORE:
+            self.verdict = Verdict.EXPLORE
+        elif self.yes_count <= 2 and self.verdict != Verdict.PARK:
+            self.verdict = Verdict.PARK
+        return self
 
 
 class PitchBrief(BaseModel):
-    """Investor-ready pitch brief for one startup idea."""
-    idea_id:            UUID
-    title:              str
-    tagline:            str
-    sections:           PitchSections
-    markdown_content:   str             = Field(description="Full brief as rendered markdown")
-    evidence_links:     list[str]       = Field(default_factory=list)
-    generated_at:       datetime        = Field(default_factory=datetime.utcnow)
-    revision_count:     int             = Field(default=0)
+    """A one-page investor pitch brief written for a single idea."""
+
+    idea_id: UUID
+    title: str = Field(..., min_length=3, max_length=120)
+    tagline: str = Field(..., max_length=120)
+    problem: str = Field(..., min_length=20)
+    solution: str = Field(..., min_length=20)
+    target_user: str = Field(..., min_length=5)
+    market_opportunity: str = Field(..., min_length=20)
+    business_model: str = Field(..., min_length=20)
+    go_to_market: str = Field(..., min_length=20)
+    key_risk: str = Field(..., min_length=10)
+    next_steps: str = Field(..., min_length=10)
+    evidence_links: list[str] = Field(default_factory=list)
+    markdown_content: str = Field(..., min_length=100)
+    revision_count: int = Field(default=0, ge=0, le=2)
 
 
-# --- Critic Agent ---
+class Critique(BaseModel):
+    """Output of the Critic agent after reviewing pitch brief(s)."""
 
-class CriticIssue(BaseModel):
-    """A single issue identified by the Critic Agent."""
-    type:           IssueType
-    description:    str
-    severity:       Severity
-    suggested_fix:  str
-    target_agent:   str     = Field(description="Which agent should be re-invoked to fix this")
+    idea_id: UUID | None = None
+    rubric: CriticRubric
+    all_pass: bool
+    approval_status: CriticStatus
+    failing_checks: list[str] = Field(default_factory=list)
+    target_agent: TargetAgent
+    target_agent_logic: str = Field(
+        default="pain_point_miner if evidence issues, "
+                "idea_generator if fundamental problems, "
+                "pitch_writer if writing/tone issues"
+    )
+    revision_feedback: str = Field(..., min_length=10)
 
-
-class CriticFeedback(BaseModel):
-    """Full critique of one pitch brief."""
-    idea_id:            UUID
-    approval_status:    CriticStatus
-    quality_score:      float           = Field(ge=0.0, le=1.0)
-    issues:             list[CriticIssue] = Field(default_factory=list)
-    revision_count:     int             = Field(default=0)
-    reviewed_at:        datetime        = Field(default_factory=datetime.utcnow)
-
-
-# --- Combined Output ---
-
-class OutputResults(BaseModel):
-    """Final deliverables produced by the Output Layer."""
-    pitch_briefs:   list[PitchBrief]    = Field(default_factory=list)
-    ranked_ideas:   list[ScoredIdea]    = Field(default_factory=list)
-    completed_at:   Optional[datetime]  = None
+    @model_validator(mode="after")
+    def _sync_all_pass(self) -> "Critique":
+        """Ensure all_pass matches rubric and approval_status."""
+        self.all_pass = self.rubric.all_pass
+        if self.all_pass:
+            self.approval_status = CriticStatus.APPROVED
+        elif self.approval_status == CriticStatus.APPROVED:
+            self.approval_status = CriticStatus.REVISE
+        return self
 
 
-# ==============================================================================
-# PIPELINE METADATA
-# ==============================================================================
+# =============================================================================
+# SHARED STATE
+# =============================================================================
 
-class TokenUsage(BaseModel):
-    """LLM token tracking per agent run."""
-    agent_id:           str
-    model:              str
-    prompt_tokens:      int = 0
-    completion_tokens:  int = 0
-    total_tokens:       int = 0
-
-
-class AgentTimestamp(BaseModel):
-    """Execution timing for one agent."""
-    agent_id:       str
-    started_at:     datetime
-    completed_at:   Optional[datetime]  = None
-
-    @property
-    def duration_seconds(self) -> Optional[float]:
-        if self.completed_at:
-            return (self.completed_at - self.started_at).total_seconds()
-        return None
-
-
-class PipelineMetadata(BaseModel):
-    """Run-level metadata: timing, token usage, status."""
-    run_id:             str             = Field(default_factory=lambda: str(uuid4()))
-    started_at:         datetime        = Field(default_factory=datetime.utcnow)
-    completed_at:       Optional[datetime] = None
-    status:             PipelineStatus  = PipelineStatus.SUCCESS
-    token_usage:        list[TokenUsage]    = Field(default_factory=list)
-    agent_timestamps:   list[AgentTimestamp] = Field(default_factory=list)
-    error_log:          list[str]           = Field(default_factory=list)
-
-    @property
-    def total_tokens(self) -> int:
-        return sum(t.total_tokens for t in self.token_usage)
-
-    @property
-    def total_duration_seconds(self) -> Optional[float]:
-        if self.completed_at:
-            return (self.completed_at - self.started_at).total_seconds()
-        return None
-
-
-# ==============================================================================
-# MASTER SHARED STATE
-# ==============================================================================
 
 class VentureForgeState(BaseModel):
     """
-    The single shared state object passed between all agents
-    via LangGraph StateGraph.
+    The single shared state object passed between all LangGraph nodes.
 
-    Every agent receives this as input and returns a modified
-    copy as output. Never mutate in place — always return
-    a new instance with updated fields.
+    Nodes should never mutate this object in place. Instead, each node
+    returns a ``dict`` of field updates; LangGraph merges them into a
+    new copy via ``model_copy(update=...)``.
 
-    Example:
-        state = VentureForgeState(user_input=UserInput(domain="developer tools"))
-        updated = state.model_copy(update={"discovery_results": results})
+    Immutable update example inside a node:
+        return {
+            "pain_points": new_pain_points,
+            "current_stage": PipelineStage.GENERATING,
+            "next_node": "idea_generator",
+        }
     """
 
-    # Input
-    user_input:             UserInput
+    # -----------------------------------------------------------------
+    # Input / Run configuration
+    # -----------------------------------------------------------------
+    domain: str = Field(..., min_length=2, max_length=100)
+    max_pain_points: int = Field(default=30, ge=5, le=100)
+    ideas_per_run: int = Field(default=5, ge=1, le=20)
+    top_n_pitches: int = Field(default=3, ge=1, le=10)
+    max_revisions: int = Field(default=2, ge=0, le=5)
 
-    # Discovery Team outputs (populated after Phase 1)
-    discovery_results:      Optional[DiscoveryResults]  = None
+    # -----------------------------------------------------------------
+    # Pipeline data (populated by worker agents)
+    # -----------------------------------------------------------------
+    pain_points: list[PainPoint] = Field(default_factory=list)
+    ideas: list[Idea] = Field(default_factory=list)
+    scored_ideas: list[ScoredIdea] = Field(default_factory=list)
+    pitch_briefs: list[PitchBrief] = Field(default_factory=list)
 
-    # Synthesis Team outputs (populated after Phase 2)
-    synthesis_results:      Optional[SynthesisResults]  = None
+    # -----------------------------------------------------------------
+    # Reflection loop state
+    # -----------------------------------------------------------------
+    critique: Critique | None = None
+    revision_count: int = Field(default=0, ge=0)
+    revision_feedback: str | None = None
 
-    # Validation Team outputs (populated after Phase 3)
-    validation_results:     Optional[ValidationResults] = None
+    # -----------------------------------------------------------------
+    # Orchestration control (set by orchestrator node)
+    # -----------------------------------------------------------------
+    next_node: str = Field(default="orchestrator")
+    current_stage: PipelineStage = Field(default=PipelineStage.IDLE)
+    previous_stage: PipelineStage | None = None
 
-    # Output Layer outputs (populated after Phase 4)
-    output:                 Optional[OutputResults]     = None
-
-    # Critic Agent feedback (grows with each reflection loop)
-    critic_feedback:        list[CriticFeedback]        = Field(default_factory=list)
-
-    # Run metadata
-    metadata:               PipelineMetadata            = Field(default_factory=PipelineMetadata)
-
-    # -------------------------------------------------------------------------
-    # Convenience helpers
-    # -------------------------------------------------------------------------
-
-    @property
-    def domain(self) -> str:
-        return self.user_input.domain
-
-    @property
-    def pain_points(self) -> list[PainPoint]:
-        if self.discovery_results:
-            return self.discovery_results.pain_points
-        return []
-
-    @property
-    def candidate_ideas(self) -> list[CandidateIdea]:
-        if self.synthesis_results:
-            return self.synthesis_results.candidate_ideas
-        return []
-
-    @property
-    def top_ideas(self) -> list[ScoredIdea]:
-        if self.validation_results:
-            return self.validation_results.ranked[:self.user_input.top_n_ideas]
-        return []
-
-    @property
-    def is_complete(self) -> bool:
-        return all([
-            self.discovery_results is not None,
-            self.synthesis_results is not None,
-            self.validation_results is not None,
-            self.output is not None,
-        ])
-
-    @property
-    def needs_revision(self) -> bool:
-        """True if Critic Agent has flagged any ideas for revision."""
-        return any(
-            fb.approval_status == CriticStatus.REVISE
-            for fb in self.critic_feedback
-        )
-
-    def log_agent_start(self, agent_id: str) -> "VentureForgeState":
-        """Record agent start time in metadata."""
-        timestamps = self.metadata.agent_timestamps + [
-            AgentTimestamp(agent_id=agent_id, started_at=datetime.utcnow())
-        ]
-        updated_meta = self.metadata.model_copy(
-            update={"agent_timestamps": timestamps}
-        )
-        return self.model_copy(update={"metadata": updated_meta})
-
-    def log_agent_end(self, agent_id: str) -> "VentureForgeState":
-        """Record agent completion time in metadata."""
-        timestamps = [
-            t.model_copy(update={"completed_at": datetime.utcnow()})
-            if t.agent_id == agent_id and t.completed_at is None
-            else t
-            for t in self.metadata.agent_timestamps
-        ]
-        updated_meta = self.metadata.model_copy(
-            update={"agent_timestamps": timestamps}
-        )
-        return self.model_copy(update={"metadata": updated_meta})
-
-    def log_error(self, agent_id: str, error: str) -> "VentureForgeState":
-        """Append an error without crashing the pipeline."""
-        errors = self.metadata.error_log + [f"[{agent_id}] {error}"]
-        updated_meta = self.metadata.model_copy(
-            update={
-                "error_log": errors,
-                "status": PipelineStatus.PARTIAL
-            }
-        )
-        return self.model_copy(update={"metadata": updated_meta})
-
-
-# ==============================================================================
-# QUICK VALIDATION (run this file directly to sanity check)
-# ==============================================================================
-
-if __name__ == "__main__":
-    # Smoke test: build a minimal state and verify it serializes correctly
-    state = VentureForgeState(
-        user_input=UserInput(domain="developer tools")
+    # -----------------------------------------------------------------
+    # Metadata & diagnostics
+    # -----------------------------------------------------------------
+    run_id: str = Field(default_factory=lambda: str(uuid4())[:8])
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    error_log: list[str] = Field(default_factory=list)
+    agent_timings: dict[str, float] = Field(
+        default_factory=dict,
+        description="agent_id -> elapsed seconds",
     )
 
-    # Simulate logging an agent
-    state = state.log_agent_start("pain_point_miner")
+    # -----------------------------------------------------------------
+    # Derived properties (convenience for agent logic)
+    # -----------------------------------------------------------------
+    @computed_field
+    @property
+    def filtered_pain_points(self) -> list[PainPoint]:
+        """Pain points that passed their own internal rubric."""
+        return [pp for pp in self.pain_points if pp.passes_rubric]
 
-    # Simulate a pain point
+    @computed_field
+    @property
+    def top_scored_ideas(self) -> list[ScoredIdea]:
+        """Ideas sorted by yes_count desc, limited to top_n_pitches."""
+        ranked = sorted(
+            self.scored_ideas,
+            key=lambda s: (s.yes_count, s.rank or 0),
+            reverse=True,
+        )
+        return ranked[: self.top_n_pitches]
+
+    @computed_field
+    @property
+    def can_revise(self) -> bool:
+        """True if the reflection loop is still allowed to revise."""
+        return self.revision_count < self.max_revisions
+
+    @computed_field
+    @property
+    def is_complete(self) -> bool:
+        """All expected outputs are present."""
+        return all(
+            [
+                self.pain_points,
+                self.ideas,
+                self.scored_ideas,
+                self.pitch_briefs,
+                self.critique is not None,
+            ]
+        )
+
+    # -----------------------------------------------------------------
+    # Immutable helpers
+    # -----------------------------------------------------------------
+    def log_error(self, agent_id: str, message: str) -> dict[str, Any]:
+        """Return a state patch that appends an error."""
+        entry = f"[{agent_id}] {message}"
+        return {"error_log": self.error_log + [entry]}
+
+    def record_timing(self, agent_id: str, elapsed_s: float) -> dict[str, Any]:
+        """Return a state patch recording agent timing."""
+        timing = {**self.agent_timings, agent_id: elapsed_s}
+        return {"agent_timings": timing}
+
+    def bump_revision(self, critique: Critique) -> dict[str, Any]:
+        """
+        Return a state patch that increments the revision counter,
+        stores the critique, and prepares state for the target agent.
+        """
+        return {
+            "revision_count": self.revision_count + 1,
+            "critique": critique,
+            "revision_feedback": critique.revision_feedback,
+            "previous_stage": self.current_stage,
+            "current_stage": PipelineStage.REVISING,
+            "next_node": critique.target_agent,
+        }
+
+    def mark_completed(self) -> dict[str, Any]:
+        """Return a state patch marking the pipeline as complete."""
+        return {
+            "current_stage": PipelineStage.COMPLETED,
+            "next_node": "__end__",
+            "completed_at": datetime.now(timezone.utc),
+        }
+
+    def mark_failed(self, reason: str) -> dict[str, Any]:
+        """Return a state patch marking the pipeline as failed."""
+        patch = {
+            "current_stage": PipelineStage.FAILED,
+            "next_node": "__end__",
+            "completed_at": datetime.now(timezone.utc),
+        }
+        patch.update(self.log_error("orchestrator", reason))
+        return patch
+
+    def reset_for_revision(self, target_agent: TargetAgent | str) -> dict[str, Any]:
+        """
+        Clear downstream data so the target worker can re-run cleanly.
+        E.g. if idea_generator is revised, we clear ideas, scored_ideas,
+        pitch_briefs, and critique.
+        """
+        target = target_agent if isinstance(target_agent, str) else target_agent.value
+        updates: dict[str, Any] = {}
+        if target == "pain_point_miner":
+            updates = {
+                "pain_points": [],
+                "ideas": [],
+                "scored_ideas": [],
+                "pitch_briefs": [],
+                "critique": None,
+            }
+        elif target == "idea_generator":
+            updates = {
+                "ideas": [],
+                "scored_ideas": [],
+                "pitch_briefs": [],
+                "critique": None,
+            }
+        elif target == "pitch_writer":
+            updates = {
+                "pitch_briefs": [],
+                "critique": None,
+            }
+        return updates
+
+
+# =============================================================================
+# QUICK VALIDATION
+# =============================================================================
+
+if __name__ == "__main__":
+    # Smoke test: construct a minimal state end-to-end
+    state = VentureForgeState(domain="developer tools")
+
     pp = PainPoint(
         title="No good local LLM tooling",
-        description="Developers frustrated by lack of lightweight local LLM tools",
-        severity=0.8,
-        frequency=42,
-        user_segment="solo developers",
-        source_url="https://reddit.com/r/programming/example",
+        description="Developers frustrated by lack of simple local LLM runners.",
+        rubric=PainPointRubric(
+            is_genuine_current_frustration=True,
+            has_verbatim_quote=True,
+            user_segment_specific=True,
+        ),
+        passes_rubric=True,
+        source_url="https://reddit.com/r/programming/comments/abc123",
         raw_quote="I wish there was a simple local LLM runner that just works",
         source=DataSource.REDDIT,
     )
 
-    discovery = DiscoveryResults(pain_points=[pp])
-    state = state.model_copy(update={"discovery_results": discovery})
-    state = state.log_agent_end("pain_point_miner")
+    pp2 = PainPoint(
+        title="Managing multiple local models is painful",
+        description="Developers struggle to keep track of which local models are installed and configured.",
+        rubric=PainPointRubric(
+            is_genuine_current_frustration=True,
+            has_verbatim_quote=True,
+            user_segment_specific=True,
+        ),
+        passes_rubric=True,
+        source_url="https://news.ycombinator.com/item?id=123456",
+        raw_quote="I have 5 different local LLM tools and I can never remember which one I configured for what.",
+        source=DataSource.HACKERNEWS,
+    )
 
-    print("✅ Schema validation passed")
+    idea = Idea(
+        title="DevFlow LLM",
+        one_liner="One-click local LLM workspace for developers.",
+        problem="Setting up local LLM environments is complicated.",
+        solution="A CLI tool that downloads, configures, and runs any open-source LLM with sensible defaults.",
+        target_user="solo developers wanting local AI without DevOps",
+        key_features=["one-command setup", "auto GPU detection", "model registry"],
+        addresses_pain_point_ids=[pp.id, pp2.id],
+    )
+
+    scored = ScoredIdea(
+        idea_id=idea.id,
+        feasibility_rubric=FeasibilityRubric(
+            can_2_3_person_team_build_mvp_in_6_months=True,
+            uses_only_existing_proven_tech=True,
+            no_special_regulatory_requirements=True,
+        ),
+        demand_rubric=DemandRubric(
+            addresses_at_least_2_pain_points=True,
+            pain_points_show_high_severity=True,
+            target_user_clearly_defined=True,
+        ),
+        novelty_rubric=NoveltyRubric(
+            differentiated_from_obvious_solutions=True,
+            leverages_unique_insight=True,
+        ),
+        yes_count=8,
+        verdict=Verdict.PURSUE,
+        one_risk="Established competitors could copy the UX quickly.",
+        rank=1,
+    )
+
+    patch = {
+        "pain_points": [pp, pp2],
+        "ideas": [idea],
+        "scored_ideas": [scored],
+        "current_stage": PipelineStage.COMPLETED,
+    }
+    state = state.model_copy(update=patch)
+
+    print("[OK] Schema validation passed")
+    print(f"   Run ID      : {state.run_id}")
     print(f"   Domain      : {state.domain}")
-    print(f"   Pain points : {len(state.pain_points)}")
+    print(f"   Pain points : {len(state.filtered_pain_points)} (passed rubric)")
+    print(f"   Ideas       : {len(state.ideas)}")
+    print(f"   Pursue      : {sum(1 for s in state.scored_ideas if s.verdict == Verdict.PURSUE)}")
     print(f"   Is complete : {state.is_complete}")
-    print(f"   Run ID      : {state.metadata.run_id}")
-    print(f"   Duration    : {state.metadata.agent_timestamps[0].duration_seconds:.4f}s")
+    print(f"   Can revise  : {state.can_revise}")
