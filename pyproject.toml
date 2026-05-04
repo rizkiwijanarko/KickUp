@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ventureforge"
+version = "0.1.0"
+description = "Autonomous multi-agent startup discovery system"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["ai", "agents", "startup", "langgraph", "multi-agent"]
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    # Core framework
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    # LLM clients
+    "openai>=1.0.0",
+    "langchain-openai>=0.2.0",
+    # UI
+    "gradio>=5.0.0",
+    # Data & ML
+    "chromadb>=0.5.0",
+    "sentence-transformers>=3.0.0",
+    "hdbscan>=0.8.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    # APIs & scraping
+    "praw>=7.7.0",
+    "requests>=2.31.0",
+    "crawl4ai>=0.3.0",
+    "pytrends>=0.1.0",
+    # Utils
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "diskcache>=5.6.0",
+    "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "pre-commit>=3.7.0",
+]
+amd = [
+    "vllm>=0.6.0",
+    "torch>=2.4.0",
+]
+
+[project.scripts]
+ventureforge = "src.main:main"
+ventureforge-ui = "ui.gradio_app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "ui"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
