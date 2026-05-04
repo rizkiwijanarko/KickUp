@@ -102,25 +102,33 @@ class DemandRubric(BaseModel):
     """Binary checks for demand (Scorer)."""
 
     addresses_at_least_2_pain_points: bool
-    pain_points_show_high_severity: bool
+    is_painkiller_not_vitamin: bool
     target_user_clearly_defined: bool
 
 
 class NoveltyRubric(BaseModel):
     """Binary checks for novelty (Scorer)."""
 
-    differentiated_from_obvious_solutions: bool
+    differentiated_from_current_behavior: bool
     leverages_unique_insight: bool
 
 
 class CriticRubric(BaseModel):
-    """Binary checks applied by the Critic to pitch briefs."""
+    """Binary checks applied by the Critic to pitch briefs.
 
+    Combines the original evidence verification with Paul Graham-style
+    pressure-test checks added via PROMPT_IDEAS.md integration.
+    """
+
+    # Original evidence gate
     all_claims_evidence_backed: bool
     no_hallucinated_source_urls: bool
-    target_user_specific_not_generic: bool
+
+    # PROMPT_IDEAS / Graham integration
+    target_user_is_specific_person: bool
+    competitive_analysis_includes_behavior: bool
     honest_risk_disclosure: bool
-    no_buzzword_filler: bool
+    discovery_questions_are_open_ended: bool
     tagline_under_12_words: bool
     go_to_market_concrete: bool
 
@@ -173,25 +181,48 @@ class ScoredIdea(BaseModel):
     feasibility_rubric: FeasibilityRubric
     demand_rubric: DemandRubric
     novelty_rubric: NoveltyRubric
+    core_assumption: str
+    fatal_flaws: list[str] = Field(default_factory=list)
     yes_count: int = Field(..., ge=0, le=8)
     total_checks: int = 8
     verdict: Verdict
     verdict_logic: str = Field(
-        default="pursue if yes_count >= 6, explore if 3-5, park if <= 2"
+        default="pursue if yes_count >= 6 AND no critical fatal flaws, explore if 3-5, park if <= 2 or fatal flaw"
     )
     one_risk: str = Field(..., max_length=300)
     rank: int | None = None
 
     @model_validator(mode="after")
     def _derive_verdict(self) -> "ScoredIdea":
-        """Ensure verdict matches yes_count."""
-        if self.yes_count >= 6 and self.verdict != Verdict.PURSUE:
+        """Derive verdict from yes_count AND fatal_flaws.
+
+        Per the Scorer prompt: if a critical fatal flaw exists, the idea
+        MUST park regardless of rubric score.
+        """
+        if self.fatal_flaws:
+            self.verdict = Verdict.PARK
+        elif self.yes_count >= 6:
             self.verdict = Verdict.PURSUE
-        elif 3 <= self.yes_count <= 5 and self.verdict != Verdict.EXPLORE:
+        elif 3 <= self.yes_count <= 5:
             self.verdict = Verdict.EXPLORE
-        elif self.yes_count <= 2 and self.verdict != Verdict.PARK:
+        else:
             self.verdict = Verdict.PARK
         return self
+
+
+class CompetitiveLandscape(BaseModel):
+    """Competitive intelligence (Pitch Writer)."""
+
+    current_behavior: str
+    direct_competitors: list[str]
+    real_enemy: str
+
+
+class ValidationPlan(BaseModel):
+    """Customer discovery strategy (Pitch Writer)."""
+
+    discovery_questions: list[str]
+    validation_criteria: str
 
 
 class PitchBrief(BaseModel):
@@ -203,11 +234,12 @@ class PitchBrief(BaseModel):
     problem: str = Field(..., min_length=20)
     solution: str = Field(..., min_length=20)
     target_user: str = Field(..., min_length=5)
-    market_opportunity: str = Field(..., min_length=20)
+    competitive_landscape: CompetitiveLandscape
+    differentiation: str
+    validation_plan: ValidationPlan
     business_model: str = Field(..., min_length=20)
     go_to_market: str = Field(..., min_length=20)
     key_risk: str = Field(..., min_length=10)
-    next_steps: str = Field(..., min_length=10)
     evidence_links: list[str] = Field(default_factory=list)
     markdown_content: str = Field(..., min_length=100)
     revision_count: int = Field(default=0, ge=0, le=2)
@@ -475,23 +507,66 @@ if __name__ == "__main__":
         ),
         demand_rubric=DemandRubric(
             addresses_at_least_2_pain_points=True,
-            pain_points_show_high_severity=True,
+            is_painkiller_not_vitamin=True,
             target_user_clearly_defined=True,
         ),
         novelty_rubric=NoveltyRubric(
-            differentiated_from_obvious_solutions=True,
+            differentiated_from_current_behavior=True,
             leverages_unique_insight=True,
         ),
+        core_assumption="Developers will switch if setup is < 1 minute.",
+        fatal_flaws=["Ollama already solves this", "Cloud providers release free tier"],
         yes_count=8,
         verdict=Verdict.PURSUE,
         one_risk="Established competitors could copy the UX quickly.",
         rank=1,
     )
 
+    brief = PitchBrief(
+        idea_id=idea.id,
+        title=idea.title,
+        tagline="One-click local LLM workspace.",
+        problem="Setting up local LLM environments is complicated.",
+        solution="A CLI tool with sensible defaults.",
+        target_user="Solo developers",
+        competitive_landscape=CompetitiveLandscape(
+            current_behavior="Manual docker setup",
+            direct_competitors=["Ollama", "LM Studio"],
+            real_enemy="Complexity and friction"
+        ),
+        differentiation="Focus on dev workflow integration",
+        validation_plan=ValidationPlan(
+            discovery_questions=["How do you run LLMs locally?", "What's the hardest part?"],
+            validation_criteria="3/5 users can start a model in < 1 minute"
+        ),
+        business_model="Freemium CLI with paid enterprise features for teams.",
+        go_to_market="ProductHunt launch followed by targeted outreach to solo devs.",
+        key_risk="Low barrier to entry in the local tooling space.",
+        evidence_links=[pp.source_url],
+        markdown_content="# DevFlow LLM\n\nFull pitch brief here that is definitely more than one hundred characters long to satisfy the Pydantic validation rules. We need enough text to describe the product, the problem it solves, and why it is better than the competition.",
+    )
+
     patch = {
         "pain_points": [pp, pp2],
         "ideas": [idea],
         "scored_ideas": [scored],
+        "pitch_briefs": [brief],
+        "critique": Critique(
+            idea_id=idea.id,
+            rubric=CriticRubric(
+                all_claims_evidence_backed=True,
+                target_user_is_specific_person=True,
+                competitive_analysis_includes_behavior=True,
+                honest_risk_disclosure=True,
+                discovery_questions_are_open_ended=True,
+                tagline_under_12_words=True,
+                go_to_market_concrete=True,
+            ),
+            all_pass=True,
+            approval_status=CriticStatus.APPROVED,
+            target_agent=TargetAgent.PITCH_WRITER,
+            revision_feedback="Excellent work."
+        ),
         "current_stage": PipelineStage.COMPLETED,
     }
     state = state.model_copy(update=patch)

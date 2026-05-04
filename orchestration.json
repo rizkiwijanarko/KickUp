@@ -1,0 +1,278 @@
+{
+  "system": {
+    "name": "VentureForge",
+    "version": "1.0.0-mvp",
+    "description": "A hierarchical multi-agent system with reflection loop that mines pain points from Reddit and Hacker News, generates startup ideas, and produces pitch briefs. Uses binary yes/no rubrics for subjective evaluation. Runs on AMD MI300X via vLLM.",
+    "framework": "LangGraph",
+    "patterns": ["hierarchical", "reflection"],
+    "execution_model": "supervisor_with_workers_and_critic_loop",
+    "max_revisions": 2,
+    "shared_state": "VentureForgeState (Pydantic, see src/state.py)"
+  },
+  "agents": [
+    {
+      "id": "orchestrator",
+      "role": "supervisor",
+      "name": "Orchestrator",
+      "description": "Central supervisor that routes tasks to worker agents in sequence, manages shared state, and handles the reflection loop based on critic feedback. Never generates content itself.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.0,
+      "input": {
+        "domain": "string (e.g., 'developer tools')",
+        "max_pain_points": "integer (default: 30)",
+        "ideas_per_run": "integer (default: 5)",
+        "top_n_pitches": "integer (default: 3)"
+      },
+      "output": {
+        "next_action": "enum [run_pain_miner, run_idea_generator, run_scorer, run_pitch_writer, run_critic, revise, complete]",
+        "target_worker": "string (which worker to invoke)",
+        "reasoning": "string"
+      },
+      "tools": ["langgraph_state_manager", "router"],
+      "downstream_agents": ["pain_point_miner", "idea_generator", "scorer", "pitch_writer", "critic"]
+    },
+    {
+      "id": "pain_point_miner",
+      "role": "worker",
+      "name": "Pain Point Miner",
+      "description": "Searches Reddit and Hacker News for genuine user complaints in the target domain. Extracts structured pain points with verbatim quotes and source URLs. Can be re-invoked by reflection loop if critic finds weak evidence.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.2,
+      "input": {
+        "domain": "string",
+        "max_pain_points": "integer (default: 30)",
+        "search_phrases": ["I hate", "I wish there was", "why is there no", "frustrated with", "annoying that", "biggest problem"],
+        "revision_feedback": "string (optional, present on re-invocation)"
+      },
+      "output": {
+        "pain_points": [
+          {
+            "id": "uuid",
+            "title": "string (5-10 words)",
+            "description": "string (1-2 sentences)",
+            "rubric": {
+              "is_genuine_current_frustration": "yes|no",
+              "has_verbatim_quote": "yes|no",
+              "user_segment_specific": "yes|no"
+            },
+            "passes_rubric": "boolean (all yes)",
+            "source_url": "string",
+            "raw_quote": "string (verbatim from source)",
+            "source": "enum [reddit, hackernews]"
+          }
+        ]
+      },
+      "tools": [
+        {
+          "name": "reddit_praw",
+          "library": "praw",
+          "subreddits": ["startups", "SaaS", "programming", "webdev", "technology", "Entrepreneur"]
+        },
+        {
+          "name": "hackernews_algolia",
+          "endpoint": "https://hn.algolia.com/api/v1/search"
+        }
+      ],
+      "rubric_purpose": "Filter out fabricated or weak pain points before downstream agents see them"
+    },
+    {
+      "id": "idea_generator",
+      "role": "worker",
+      "name": "Idea Generator",
+      "description": "Groups pain points into themes and generates distinct startup ideas. Each idea must address at least 2 pain points. Can be re-invoked by reflection loop if critic finds ideas weak.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.7,
+      "input": {
+        "pain_points": "array (filtered, passes_rubric=true only)",
+        "domain": "string",
+        "ideas_per_run": "integer (default: 5)",
+        "revision_feedback": "string (optional, present on re-invocation)"
+      },
+      "output": {
+        "ideas": [
+          {
+            "id": "uuid",
+            "title": "string (3-5 words)",
+            "one_liner": "string (< 15 words)",
+            "problem": "string (2-3 sentences)",
+            "solution": "string (2-3 sentences)",
+            "target_user": "string (specific segment)",
+            "key_features": ["array of 3-5 strings"],
+            "addresses_pain_point_ids": ["array of uuids"]
+          }
+        ]
+      },
+      "tools": ["llm_brainstormer"]
+    },
+    {
+      "id": "scorer",
+      "role": "worker",
+      "name": "Scorer",
+      "description": "Evaluates each idea using a binary yes/no rubric across 3 dimensions (feasibility, demand, novelty). Final score is the count of yes answers. No subjective floating-point scores.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.1,
+      "input": {
+        "ideas": "array (from idea_generator)",
+        "pain_points": "array (for demand evidence)"
+      },
+      "output": {
+        "scored_ideas": [
+          {
+            "idea_id": "uuid",
+            "feasibility_rubric": {
+              "can_2_3_person_team_build_mvp_in_6_months": "yes|no",
+              "uses_only_existing_proven_tech": "yes|no",
+              "no_special_regulatory_requirements": "yes|no"
+            },
+            "demand_rubric": {
+              "addresses_at_least_2_pain_points": "yes|no",
+              "pain_points_show_high_severity": "yes|no",
+              "target_user_clearly_defined": "yes|no"
+            },
+            "novelty_rubric": {
+              "differentiated_from_obvious_solutions": "yes|no",
+              "leverages_unique_insight": "yes|no"
+            },
+            "yes_count": "integer (0-8)",
+            "total_checks": 8,
+            "verdict": "enum [pursue, explore, park]",
+            "verdict_logic": "pursue if yes_count >= 6, explore if 3-5, park if <= 2",
+            "one_risk": "string (single biggest risk in one sentence)",
+            "rank": "integer"
+          }
+        ]
+      },
+      "tools": ["llm_judge"]
+    },
+    {
+      "id": "pitch_writer",
+      "role": "worker",
+      "name": "Pitch Writer",
+      "description": "Writes investor-ready one-page pitch briefs in markdown for the top N ideas. Can be re-invoked by reflection loop if critic flags hallucinations or tone issues.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.5,
+      "input": {
+        "scored_ideas": "array (top N, sorted by yes_count desc)",
+        "pain_points": "array (for evidence URLs)",
+        "top_n": "integer (default: 3)",
+        "revision_feedback": "string (optional, present on re-invocation)"
+      },
+      "output": {
+        "pitch_briefs": [
+          {
+            "idea_id": "uuid",
+            "title": "string",
+            "tagline": "string (< 12 words)",
+            "problem": "string",
+            "solution": "string",
+            "target_user": "string",
+            "market_opportunity": "string",
+            "business_model": "string",
+            "go_to_market": "string",
+            "key_risk": "string",
+            "next_steps": "string",
+            "evidence_links": ["array of source urls"],
+            "markdown_content": "string (full rendered markdown)",
+            "revision_count": "integer (0, 1, or 2)"
+          }
+        ]
+      },
+      "tools": ["llm_writer", "markdown_renderer"]
+    },
+    {
+      "id": "critic",
+      "role": "reflector",
+      "name": "Critic",
+      "description": "Adversarial reviewer that evaluates pitch briefs using a binary yes/no rubric. If any required check fails, returns 'revise' verdict with the target worker agent to re-invoke. Caps at 2 revisions.",
+      "model": "llama-3.3-70b-instruct",
+      "temperature": 0.1,
+      "input": {
+        "pitch_brief": "object (single brief from pitch_writer)",
+        "pain_points": "array (for evidence verification)",
+        "current_revision_count": "integer (0, 1, or 2)"
+      },
+      "output": {
+        "critique": {
+          "idea_id": "uuid",
+          "rubric": {
+            "all_claims_evidence_backed": "yes|no",
+            "no_hallucinated_source_urls": "yes|no",
+            "target_user_specific_not_generic": "yes|no",
+            "honest_risk_disclosure": "yes|no",
+            "no_buzzword_filler": "yes|no",
+            "tagline_under_12_words": "yes|no",
+            "go_to_market_concrete": "yes|no"
+          },
+          "all_pass": "boolean",
+          "approval_status": "enum [approved, revise, reject]",
+          "failing_checks": ["array of strings (which rubric items returned no)"],
+          "target_agent": "enum [pain_point_miner, idea_generator, pitch_writer]",
+          "target_agent_logic": "pain_point_miner if evidence issues, idea_generator if fundamental problems, pitch_writer if writing/tone issues",
+          "revision_feedback": "string (specific instruction for the target worker)"
+        }
+      },
+      "tools": ["llm_adversary", "evidence_verifier"],
+      "loop_config": {
+        "max_revisions": 2,
+        "approval_logic": "approved if all rubric items are 'yes'",
+        "auto_approve_on_max_revisions": true
+      }
+    }
+  ],
+  "execution_graph": {
+    "nodes": [
+      "orchestrator",
+      "pain_point_miner",
+      "idea_generator",
+      "scorer",
+      "pitch_writer",
+      "critic"
+    ],
+    "edges": [
+      {"from": "START", "to": "orchestrator", "type": "entry"},
+      {"from": "orchestrator", "to": "pain_point_miner", "type": "supervisor_routes"},
+      {"from": "pain_point_miner", "to": "orchestrator", "type": "worker_returns"},
+      {"from": "orchestrator", "to": "idea_generator", "type": "supervisor_routes"},
+      {"from": "idea_generator", "to": "orchestrator", "type": "worker_returns"},
+      {"from": "orchestrator", "to": "scorer", "type": "supervisor_routes"},
+      {"from": "scorer", "to": "orchestrator", "type": "worker_returns"},
+      {"from": "orchestrator", "to": "pitch_writer", "type": "supervisor_routes"},
+      {"from": "pitch_writer", "to": "orchestrator", "type": "worker_returns"},
+      {"from": "orchestrator", "to": "critic", "type": "supervisor_routes"},
+      {"from": "critic", "to": "orchestrator", "type": "worker_returns"},
+      {"from": "orchestrator", "to": "pain_point_miner", "type": "reflection_loop", "condition": "critic.target_agent == 'pain_point_miner' AND revision_count < 2"},
+      {"from": "orchestrator", "to": "idea_generator", "type": "reflection_loop", "condition": "critic.target_agent == 'idea_generator' AND revision_count < 2"},
+      {"from": "orchestrator", "to": "pitch_writer", "type": "reflection_loop", "condition": "critic.target_agent == 'pitch_writer' AND revision_count < 2"},
+      {"from": "orchestrator", "to": "END", "type": "terminal", "condition": "critic.approval_status == 'approved' OR revision_count >= 2"}
+    ]
+  },
+  "infrastructure": {
+    "llm_serving": {
+      "dev": "OpenAI / OpenRouter (any OpenAI-compatible API)",
+      "production": "vLLM on AMD Instinct MI300X via ROCm",
+      "model": "meta-llama/Llama-3.3-70B-Instruct",
+      "switching_mechanism": "Single LLM_BASE_URL env var swap"
+    },
+    "framework": "LangGraph",
+    "state_persistence": "SQLite (LangGraph checkpointer)",
+    "cache": "diskcache (24h TTL for API calls)",
+    "ui": "Gradio",
+    "logging": "loguru",
+    "validation": "Pydantic v2"
+  },
+  "design_principles": {
+    "binary_rubrics_over_scores": "All subjective evaluation uses yes/no checks rather than 0.0-1.0 scores. Final scores = count of yes answers. This makes evaluation reproducible and auditable.",
+    "no_hallucinations": "Every pain point and pitch claim must cite a real source URL. Critic agent verifies this in reflection.",
+    "graceful_degradation": "Failed agents don't crash pipeline. Errors logged, partial state returned.",
+    "immutable_state": "Agents never mutate state in place. Always return new state via model_copy(update=...).",
+    "provider_agnostic_llm": "Single env var switches between OpenAI/OpenRouter/AMD vLLM. No provider-specific code in agents."
+  },
+  "success_criteria": [
+    "Pipeline runs end-to-end without crashing",
+    "Critic reflection loop triggers at least once during demo",
+    "All pain points have real, verifiable source URLs",
+    "Gradio UI shows live agent execution with rubric outcomes",
+    "Final demo runs on AMD vLLM endpoint (not OpenAI)",
+    "Total runtime under 10 minutes per full run"
+  ]
+}
