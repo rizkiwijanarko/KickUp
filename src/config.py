@@ -52,14 +52,20 @@ class Settings(BaseSettings):
     request_timeout: int = Field(default=120, ge=1)
 
     # ------------------------------------------------------------------
-    # Reddit API (PRAW)
+    # Reddit — NOT required.  We use public `.json` endpoints (no PRAW).
+    # Only set these if you later want PRAW features.
     # ------------------------------------------------------------------
     reddit_client_id: str | None = Field(default=None)
     reddit_client_secret: str | None = Field(default=None)
     reddit_user_agent: str = Field(
         default="ventureforge:v1.0 by u/username",
-        description="PRAW user agent string",
+        description="Optional PRAW user agent string",
     )
+
+    # ------------------------------------------------------------------
+    # Tavily — used for community-discovery fallback
+    # ------------------------------------------------------------------
+    tavily_api_key: str | None = Field(default=None)
 
     # ------------------------------------------------------------------
     # HuggingFace (for AMD vLLM model download)
@@ -97,6 +103,10 @@ class Settings(BaseSettings):
             # Allow it but it's clearly a placeholder
             pass
         return v
+
+    @property
+    def tavily_enabled(self) -> bool:
+        return bool(self.tavily_api_key)
 
     @property
     def effective_llm_config(self) -> dict:
