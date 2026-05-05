@@ -25,7 +25,7 @@ def _build_system_prompt() -> str:
 def _build_user_prompt(state: VentureForgeState) -> str:
     top_ideas = state.top_scored_ideas
     ideas_map = {str(idea.id): idea for idea in state.ideas}
-    
+
     scored_blobs = []
     for s in top_ideas:
         idea = ideas_map.get(str(s.idea_id))
@@ -56,11 +56,37 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         for pp in pps
     ]
 
+    feedback = state.revision_feedback or "None"
+
+    # If revision feedback exists and the Critic targeted the
+    # pitch_writer, we want the LLM to explicitly fix the failing
+    # rubric checks (tagline length, unscalable_acquisition_concrete,
+    # gtm_leads_with_manual_recruitment) without changing the core
+    # idea or evidence.
+    revision_block = ""
+    if state.revision_feedback:
+        # Optionally, look at the most recent critique for extra
+        # context, if available.
+        last_crit = state.critiques[-1] if state.critiques else None
+        failing = ", ".join(last_crit.failing_checks) if last_crit else "(see feedback)"
+        revision_block = (
+            "THIS IS A REVISION ROUND for the pitch briefs. The critic "
+            "flagged issues in the pitch writing (e.g., tagline length, "
+            "unscalable acquisition, or go-to-market style). You MUST "
+            "fix the following before returning new briefs:\n"  # noqa: E501
+            f"- Critic failing checks: {failing}\n"
+            f"- Critic feedback: {feedback}\n\n"
+            "Do NOT change the underlying idea, evidence_links, or core "
+            "assumptions. Only rewrite the pitch fields (tagline, "
+            "go_to_market, business_model, etc.) so that they satisfy the "
+            "rubric while staying truthful to the evidence.\n\n"
+        )
+
     user_text = (
         f"Domain: {state.domain}\n\n"
         f"SCORED IDEAS (Top {len(scored_blobs)}):\n{json.dumps(scored_blobs, indent=2)}\n\n"
         f"SUPPORTING PAIN POINTS:\n{json.dumps(pp_blobs, indent=2)}\n\n"
-        f"Revision feedback (if any): {state.revision_feedback or 'None'}\n\n"
+        f"{revision_block}"
         "Write full pitch briefs for these ideas. Return a JSON array of pitch briefs."
     )
     return user_text

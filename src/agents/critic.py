@@ -24,12 +24,20 @@ def _build_system_prompt() -> str:
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
-    # Critique the first pitch brief that isn't approved yet (simplified for now)
-    # In a full multi-pitch system, we'd critique all or the best one.
+    # Critique the pitch brief corresponding to the highest-scoring idea
+    # (top_scored_ideas[0]) when possible; fall back to the first brief.
     if not state.pitch_briefs:
         return "No pitch briefs to review."
 
     brief = state.pitch_briefs[0]
+    if state.scored_ideas:
+        top_ids = [s.idea_id for s in state.top_scored_ideas]
+        for idea_id in top_ids:
+            match = next((b for b in state.pitch_briefs if b.idea_id == idea_id), None)
+            if match is not None:
+                brief = match
+                break
+
     revision_count = state.get_revision_count(brief.idea_id)
 
     # Look up the Scorer output for this pitch so the Critic can cross-reference
@@ -92,8 +100,18 @@ def run(state: VentureForgeState) -> dict:
         )
         return patch
 
-    # Auto-approve if max revisions reached for this pitch
+    # Auto-approve if max revisions reached for this pitch. We apply the
+    # same brief-selection logic as in _build_user_prompt: prefer the
+    # pitch for the highest-scoring idea when available.
     brief = state.pitch_briefs[0]
+    if state.scored_ideas:
+        top_ids = [s.idea_id for s in state.top_scored_ideas]
+        for idea_id in top_ids:
+            match = next((b for b in state.pitch_briefs if b.idea_id == idea_id), None)
+            if match is not None:
+                brief = match
+                break
+
     if state.get_revision_count(brief.idea_id) >= state.max_revisions:
         rubric = CritiqueRubric(
             all_claims_evidence_backed=True,
@@ -156,7 +174,7 @@ def run(state: VentureForgeState) -> dict:
 
         rubric = CritiqueRubric(**coerce_rubric_bools(raw["rubric"]))
         critique = Critique(
-            idea_id=state.pitch_briefs[0].idea_id,
+            idea_id=brief.idea_id,
             reasoning_trace=raw.get("reasoning_trace", ""),
             rubric=rubric,
             all_pass=raw["all_pass"],

@@ -215,7 +215,12 @@ class PitchBrief(BaseModel):
 
 
 class Critique(BaseModel):
-    """Output of the Critic agent after reviewing a pitch brief."""
+    """Output of the Critic agent after reviewing a pitch brief.
+
+    The model validator enforces that ``all_pass``, ``failing_checks``,
+    ``approval_status`` and ``target_agent`` are consistent with the
+    rubric and the documented target-agent priority rules.
+    """
 
     idea_id: UUID
     reasoning_trace: str
@@ -228,12 +233,36 @@ class Critique(BaseModel):
 
     @model_validator(mode="after")
     def _sync_from_rubric(self) -> "Critique":
-        """Ensure all_pass and failing_checks match the rubric booleans."""
+        """Ensure all_pass/failing_checks/approval_status/target_agent match rubric.
+
+        Target-agent priority:
+        1. pain_point_miner — if any evidence check fails
+           (all_claims_evidence_backed or no_hallucinated_source_urls).
+        2. idea_generator — if positioning checks fail
+           (target_is_contained_fire or competition_embraced_with_thesis)
+           and evidence checks pass.
+        3. pitch_writer — otherwise (writing/tone only).
+        """
         rubric_dict = self.rubric.model_dump()
         self.failing_checks = [k for k, v in rubric_dict.items() if not v]
         self.all_pass = len(self.failing_checks) == 0
-        if self.all_pass:
-            self.approval_status = "approved"
+
+        # Approval status derived solely from rubric
+        self.approval_status = "approved" if self.all_pass else "revise"
+
+        # Enforce target_agent priority only when revision is required
+        if not self.all_pass:
+            r = self.rubric
+            evidence_failed = (not r.all_claims_evidence_backed) or (not r.no_hallucinated_source_urls)
+            positioning_failed = (not r.target_is_contained_fire) or (not r.competition_embraced_with_thesis)
+
+            if evidence_failed:
+                self.target_agent = "pain_point_miner"
+            elif positioning_failed:
+                self.target_agent = "idea_generator"
+            else:
+                self.target_agent = "pitch_writer"
+
         return self
 
 

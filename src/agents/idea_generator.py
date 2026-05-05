@@ -55,12 +55,31 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         for pp in pps
     ]
 
+    # If revision feedback exists, this run is part of the reflection
+    # loop (typically triggered by the Critic for positioning issues
+    # such as target_is_contained_fire or competition_embraced_with_thesis).
+    # Make that explicit in the prompt so the LLM focuses on fixing
+    # those weaknesses first.
+    revision_block = ""
+    if state.revision_feedback:
+        revision_block = (
+            "THIS IS A REVISION ROUND. The critic flagged weaknesses in "
+            "positioning (e.g., target user not a contained community, "
+            "or weak competitive thesis). You MUST address the following "
+            "feedback before generating ideas:\n"  # noqa: E501
+            f"- Critic feedback: {feedback}\n\n"
+            "In your new ideas, make the target_user a specific, named, "
+            "reachable community (a 'contained fire') and make the "
+            "competition thesis explicit: what are users doing today and "
+            "what incumbents are afraid to do.\n\n"
+        )
+
     user_text = (
         f"Domain: {domain}\n"
-        f"Ideas to generate: {count}\n"
-        f"Revision feedback (if any): {feedback}\n\n"
+        f"Ideas to generate: {count}\n\n"
         f"PAIN POINTS ({len(pps)} provided):\n"
         f"{json.dumps(pp_blobs, indent=2)}\n\n"
+        f"{revision_block}"
         "Generate the exact number of ideas requested. "
         "Each idea must reference at least 2 pain point UUIDs from the list above. "
         "Return JSON: {\"ideas\": [ ... ]}. "
