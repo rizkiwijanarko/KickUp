@@ -25,19 +25,36 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # LLM Provider (agnostic — swap LLM_BASE_URL to switch)
+    # LLM Provider — REASONING tier (scorer, critic)
     # ------------------------------------------------------------------
     llm_base_url: str = Field(
         default="https://api.openai.com/v1",
-        description="OpenAI-compatible API base URL",
+        description="OpenAI-compatible API base URL for reasoning tasks",
     )
     llm_api_key: str = Field(
         default="",
-        description="API key for the LLM provider",
+        description="API key for the reasoning LLM provider",
     )
     llm_model: str = Field(
         default="gpt-4o-mini",
-        description="Model name served at the endpoint",
+        description="Model name for reasoning tasks (scorer, critic)",
+    )
+
+    # ------------------------------------------------------------------
+    # LLM Provider — FAST tier (pain_point_miner, idea_generator, pitch_writer)
+    # Falls back to reasoning tier if unset.
+    # ------------------------------------------------------------------
+    fast_llm_base_url: str | None = Field(
+        default=None,
+        description="Base URL for fast/non-reasoning LLM. Defaults to llm_base_url.",
+    )
+    fast_llm_api_key: str | None = Field(
+        default=None,
+        description="API key for fast LLM. Defaults to llm_api_key.",
+    )
+    fast_llm_model: str | None = Field(
+        default=None,
+        description="Model name for fast tasks. Defaults to llm_model.",
     )
 
     # Optional: separate OpenRouter config (falls back to llm_* if unset)
@@ -115,6 +132,21 @@ class Settings(BaseSettings):
             "base_url": self.llm_base_url,
             "api_key": self.llm_api_key,
             "model": self.llm_model,
+            "timeout": self.request_timeout,
+        }
+
+    def get_llm_config(self, *, reasoning: bool = False) -> dict:
+        """Return LLM config for a given tier.
+
+        reasoning=True  → scorer, critic (large model)
+        reasoning=False → pain_point_miner, idea_generator, pitch_writer (fast model)
+        """
+        if reasoning:
+            return self.effective_llm_config
+        return {
+            "base_url": self.fast_llm_base_url or self.llm_base_url,
+            "api_key": self.fast_llm_api_key or self.llm_api_key,
+            "model": self.fast_llm_model or self.llm_model,
             "timeout": self.request_timeout,
         }
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, computed_field, model_validator
@@ -42,14 +42,6 @@ class Verdict(str, Enum):
     PARK = "park"
 
 
-class CriticStatus(str, Enum):
-    """Outcome of a Critic review."""
-
-    APPROVED = "approved"
-    REVISE = "revise"
-    REJECT = "reject"
-
-
 class TargetAgent(str, Enum):
     """Which worker the reflection loop should send the revision to."""
 
@@ -70,6 +62,7 @@ class PipelineStage(str, Enum):
     REVISING = "revising"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 # =============================================================================
@@ -91,11 +84,14 @@ class PainPointRubric(BaseModel):
 
 
 class FeasibilityRubric(BaseModel):
-    """Binary checks for feasibility (Scorer)."""
+    """Binary checks for feasibility (Scorer).
 
+    PG-style: manual-first and schlep are POSITIVE signals, not penalties.
+    """
+
+    can_be_solved_manually_first: bool
+    has_schlep_or_unsexy_advantage: bool
     can_2_3_person_team_build_mvp_in_6_months: bool
-    uses_only_existing_proven_tech: bool
-    no_special_regulatory_requirements: bool
 
 
 class DemandRubric(BaseModel):
@@ -103,44 +99,36 @@ class DemandRubric(BaseModel):
 
     addresses_at_least_2_pain_points: bool
     is_painkiller_not_vitamin: bool
-    target_user_clearly_defined: bool
+    has_clear_vein_of_early_adopters: bool
 
 
 class NoveltyRubric(BaseModel):
     """Binary checks for novelty (Scorer)."""
 
     differentiated_from_current_behavior: bool
-    leverages_unique_insight: bool
+    has_path_out_of_niche: bool
 
 
-class CriticRubric(BaseModel):
+class FatalFlaw(BaseModel):
+    """A specific, falsifiable reason an idea might fail."""
+
+    flaw: str
+    severity: Literal["fatal", "major", "minor"]
+
+
+class CritiqueRubric(BaseModel):
     """Binary checks applied by the Critic to pitch briefs.
 
-    Combines the original evidence verification with Paul Graham-style
-    pressure-test checks added via PROMPT_IDEAS.md integration.
+    PG pressure-test criteria with concrete, non-vague definitions.
     """
 
-    # Original evidence gate
     all_claims_evidence_backed: bool
     no_hallucinated_source_urls: bool
-
-    # PROMPT_IDEAS / Graham integration
-    target_user_is_specific_person: bool
-    competitive_analysis_includes_behavior: bool
-    honest_risk_disclosure: bool
-    discovery_questions_are_open_ended: bool
     tagline_under_12_words: bool
-    go_to_market_concrete: bool
-
-    @computed_field
-    @property
-    def all_pass(self) -> bool:
-        return all(self.model_dump().values())
-
-    @computed_field
-    @property
-    def failing_checks(self) -> list[str]:
-        return [k for k, v in self.model_dump().items() if not v]
+    target_is_contained_fire: bool
+    competition_embraced_with_thesis: bool
+    unscalable_acquisition_concrete: bool
+    gtm_leads_with_manual_recruitment: bool
 
 
 # =============================================================================
@@ -178,51 +166,33 @@ class ScoredIdea(BaseModel):
     """An idea with binary rubric evaluation applied by the Scorer."""
 
     idea_id: UUID
+    reasoning_trace: str
     feasibility_rubric: FeasibilityRubric
     demand_rubric: DemandRubric
     novelty_rubric: NoveltyRubric
     core_assumption: str
-    fatal_flaws: list[str] = Field(default_factory=list)
+    fatal_flaws: list[FatalFlaw] = Field(default_factory=list)
     yes_count: int = Field(..., ge=0, le=8)
     total_checks: int = 8
-    verdict: Verdict
-    verdict_logic: str = Field(
-        default="pursue if yes_count >= 6 AND no critical fatal flaws, explore if 3-5, park if <= 2 or fatal flaw"
-    )
+    verdict: Literal["pursue", "explore", "park"]
     one_risk: str = Field(..., max_length=300)
     rank: int | None = None
 
     @model_validator(mode="after")
     def _derive_verdict(self) -> "ScoredIdea":
-        """Derive verdict from yes_count AND fatal_flaws.
+        """Derive verdict from yes_count AND fatal flaw severity.
 
-        Per the Scorer prompt: if a critical fatal flaw exists, the idea
-        MUST park regardless of rubric score.
+        Per the Scorer prompt: a fatal severity flaw ALWAYS parks,
+        regardless of yes_count.
         """
-        if self.fatal_flaws:
-            self.verdict = Verdict.PARK
-        elif self.yes_count >= 6:
-            self.verdict = Verdict.PURSUE
-        elif 3 <= self.yes_count <= 5:
-            self.verdict = Verdict.EXPLORE
-        else:
-            self.verdict = Verdict.PARK
+        has_fatal = any(f.severity == "fatal" for f in self.fatal_flaws)
+        if self.yes_count <= 2 or has_fatal:
+            self.verdict = "park"
+        elif 3 <= self.yes_count <= 5 and not has_fatal:
+            self.verdict = "explore"
+        elif self.yes_count >= 6 and not has_fatal:
+            self.verdict = "pursue"
         return self
-
-
-class CompetitiveLandscape(BaseModel):
-    """Competitive intelligence (Pitch Writer)."""
-
-    current_behavior: str
-    direct_competitors: list[str]
-    real_enemy: str
-
-
-class ValidationPlan(BaseModel):
-    """Customer discovery strategy (Pitch Writer)."""
-
-    discovery_questions: list[str]
-    validation_criteria: str
 
 
 class PitchBrief(BaseModel):
@@ -234,42 +204,51 @@ class PitchBrief(BaseModel):
     problem: str = Field(..., min_length=20)
     solution: str = Field(..., min_length=20)
     target_user: str = Field(..., min_length=5)
-    competitive_landscape: CompetitiveLandscape
-    differentiation: str
-    validation_plan: ValidationPlan
+    market_opportunity: str = Field(..., min_length=20)
     business_model: str = Field(..., min_length=20)
     go_to_market: str = Field(..., min_length=20)
     key_risk: str = Field(..., min_length=10)
+    next_steps: str = Field(..., min_length=10)
     evidence_links: list[str] = Field(default_factory=list)
     markdown_content: str = Field(..., min_length=100)
     revision_count: int = Field(default=0, ge=0, le=2)
 
 
 class Critique(BaseModel):
-    """Output of the Critic agent after reviewing pitch brief(s)."""
+    """Output of the Critic agent after reviewing a pitch brief."""
 
-    idea_id: UUID | None = None
-    rubric: CriticRubric
+    idea_id: UUID
+    reasoning_trace: str
+    rubric: CritiqueRubric
     all_pass: bool
-    approval_status: CriticStatus
+    approval_status: Literal["approved", "revise"]
     failing_checks: list[str] = Field(default_factory=list)
-    target_agent: TargetAgent
-    target_agent_logic: str = Field(
-        default="pain_point_miner if evidence issues, "
-                "idea_generator if fundamental problems, "
-                "pitch_writer if writing/tone issues"
-    )
+    target_agent: Literal["pain_point_miner", "idea_generator", "pitch_writer"]
     revision_feedback: str = Field(..., min_length=10)
 
     @model_validator(mode="after")
-    def _sync_all_pass(self) -> "Critique":
-        """Ensure all_pass matches rubric and approval_status."""
-        self.all_pass = self.rubric.all_pass
+    def _sync_from_rubric(self) -> "Critique":
+        """Ensure all_pass and failing_checks match the rubric booleans."""
+        rubric_dict = self.rubric.model_dump()
+        self.failing_checks = [k for k, v in rubric_dict.items() if not v]
+        self.all_pass = len(self.failing_checks) == 0
         if self.all_pass:
-            self.approval_status = CriticStatus.APPROVED
-        elif self.approval_status == CriticStatus.APPROVED:
-            self.approval_status = CriticStatus.REVISE
+            self.approval_status = "approved"
         return self
+
+
+class RunEvent(BaseModel):
+    """A single high-level event emitted during a pipeline run.
+
+    Used by the UI to render an agent execution log.
+    """
+
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    agent: str
+    stage: PipelineStage
+    kind: Literal["info", "warning", "error"] = "info"
+    message: str
+    idea_id: UUID | None = None
 
 
 # =============================================================================
@@ -311,10 +290,11 @@ class VentureForgeState(BaseModel):
     pitch_briefs: list[PitchBrief] = Field(default_factory=list)
 
     # -----------------------------------------------------------------
-    # Reflection loop state
+    # Reflection loop state (per-pitch revision tracking)
     # -----------------------------------------------------------------
     critique: Critique | None = None
-    revision_count: int = Field(default=0, ge=0)
+    critiques: list[Critique] = Field(default_factory=list)
+    revision_counts: dict[str, int] = Field(default_factory=dict)
     revision_feedback: str | None = None
 
     # -----------------------------------------------------------------
@@ -334,6 +314,10 @@ class VentureForgeState(BaseModel):
     agent_timings: dict[str, float] = Field(
         default_factory=dict,
         description="agent_id -> elapsed seconds",
+    )
+    events: list[RunEvent] = Field(
+        default_factory=list,
+        description="High-level run events emitted by agents/orchestrator for UI logs.",
     )
 
     # -----------------------------------------------------------------
@@ -359,8 +343,10 @@ class VentureForgeState(BaseModel):
     @computed_field
     @property
     def can_revise(self) -> bool:
-        """True if the reflection loop is still allowed to revise."""
-        return self.revision_count < self.max_revisions
+        """True if the most recently critiqued pitch can still be revised."""
+        if self.critique is None:
+            return True
+        return self.get_revision_count(self.critique.idea_id) < self.max_revisions
 
     @computed_field
     @property
@@ -377,12 +363,50 @@ class VentureForgeState(BaseModel):
         )
 
     # -----------------------------------------------------------------
+    # Per-pitch revision helpers
+    # -----------------------------------------------------------------
+    def get_revision_count(self, idea_id: UUID) -> int:
+        """Return the number of revisions already done for a specific idea."""
+        return self.revision_counts.get(str(idea_id), 0)
+
+    def increment_revision_count(self, idea_id: UUID) -> "VentureForgeState":
+        """Return a new state with the revision count bumped for this idea."""
+        updated = dict(self.revision_counts)
+        updated[str(idea_id)] = updated.get(str(idea_id), 0) + 1
+        return self.model_copy(update={"revision_counts": updated})
+
+    # -----------------------------------------------------------------
     # Immutable helpers
     # -----------------------------------------------------------------
     def log_error(self, agent_id: str, message: str) -> dict[str, Any]:
-        """Return a state patch that appends an error."""
+        """Return a state patch that appends an error and emits an error event."""
         entry = f"[{agent_id}] {message}"
-        return {"error_log": self.error_log + [entry]}
+        events = self.events + [
+            RunEvent(
+                agent=agent_id,
+                stage=self.current_stage,
+                kind="error",
+                message=message,
+            )
+        ]
+        return {"error_log": self.error_log + [entry], "events": events}
+
+    def add_event(
+        self,
+        *,
+        agent: str,
+        stage: PipelineStage,
+        kind: Literal["info", "warning", "error"] = "info",
+        message: str,
+        idea_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Return a state patch that appends a RunEvent to ``events``.
+
+        Agents and the orchestrator should call this to record high-level
+        progress suitable for a UI log.
+        """
+        ev = RunEvent(agent=agent, stage=stage, kind=kind, message=message, idea_id=idea_id)
+        return {"events": self.events + [ev]}
 
     def record_timing(self, agent_id: str, elapsed_s: float) -> dict[str, Any]:
         """Return a state patch recording agent timing."""
@@ -391,11 +415,15 @@ class VentureForgeState(BaseModel):
 
     def bump_revision(self, critique: Critique) -> dict[str, Any]:
         """
-        Return a state patch that increments the revision counter,
-        stores the critique, and prepares state for the target agent.
+        Return a state patch that increments the per-pitch revision counter,
+        archives the critique, stores the critique, and prepares state for
+        the target agent.
         """
+        idea_id = str(critique.idea_id)
+        updated_counts = {**self.revision_counts, idea_id: self.revision_counts.get(idea_id, 0) + 1}
         return {
-            "revision_count": self.revision_count + 1,
+            "revision_counts": updated_counts,
+            "critiques": self.critiques + [critique],
             "critique": critique,
             "revision_feedback": critique.revision_feedback,
             "previous_stage": self.current_stage,
@@ -419,6 +447,23 @@ class VentureForgeState(BaseModel):
             "completed_at": datetime.now(timezone.utc),
         }
         patch.update(self.log_error("orchestrator", reason))
+        return patch
+
+    def mark_cancelled(self, reason: str = "Cancelled by user") -> dict[str, Any]:
+        """Return a state patch marking the pipeline as cancelled."""
+        patch = {
+            "current_stage": PipelineStage.CANCELLED,
+            "next_node": "__end__",
+            "completed_at": datetime.now(timezone.utc),
+        }
+        patch.update(
+            self.add_event(
+                agent="orchestrator",
+                stage=self.current_stage,
+                kind="warning",
+                message=reason,
+            )
+        )
         return patch
 
     def reset_for_revision(self, target_agent: TargetAgent | str) -> dict[str, Any]:
@@ -500,24 +545,28 @@ if __name__ == "__main__":
 
     scored = ScoredIdea(
         idea_id=idea.id,
+        reasoning_trace="The manual version is a bash script that downloads models. Demand is a well — deep but narrow. The schlep is ROCm compatibility. First 10 users are in r/LocalLLaMA.",
         feasibility_rubric=FeasibilityRubric(
+            can_be_solved_manually_first=True,
+            has_schlep_or_unsexy_advantage=True,
             can_2_3_person_team_build_mvp_in_6_months=True,
-            uses_only_existing_proven_tech=True,
-            no_special_regulatory_requirements=True,
         ),
         demand_rubric=DemandRubric(
             addresses_at_least_2_pain_points=True,
             is_painkiller_not_vitamin=True,
-            target_user_clearly_defined=True,
+            has_clear_vein_of_early_adopters=True,
         ),
         novelty_rubric=NoveltyRubric(
             differentiated_from_current_behavior=True,
-            leverages_unique_insight=True,
+            has_path_out_of_niche=True,
         ),
         core_assumption="Developers will switch if setup is < 1 minute.",
-        fatal_flaws=["Ollama already solves this", "Cloud providers release free tier"],
+        fatal_flaws=[
+            FatalFlaw(flaw="Ollama already solves this for most users", severity="major"),
+            FatalFlaw(flaw="Cloud providers could release a simpler free tier", severity="minor"),
+        ],
         yes_count=8,
-        verdict=Verdict.PURSUE,
+        verdict="pursue",
         one_risk="Established competitors could copy the UX quickly.",
         rank=1,
     )
@@ -529,21 +578,32 @@ if __name__ == "__main__":
         problem="Setting up local LLM environments is complicated.",
         solution="A CLI tool with sensible defaults.",
         target_user="Solo developers",
-        competitive_landscape=CompetitiveLandscape(
-            current_behavior="Manual docker setup",
-            direct_competitors=["Ollama", "LM Studio"],
-            real_enemy="Complexity and friction"
-        ),
-        differentiation="Focus on dev workflow integration",
-        validation_plan=ValidationPlan(
-            discovery_questions=["How do you run LLMs locally?", "What's the hardest part?"],
-            validation_criteria="3/5 users can start a model in < 1 minute"
-        ),
+        market_opportunity="Growing demand for local AI among privacy-conscious solo developers who want LLM access without cloud dependencies.",
         business_model="Freemium CLI with paid enterprise features for teams.",
         go_to_market="ProductHunt launch followed by targeted outreach to solo devs.",
         key_risk="Low barrier to entry in the local tooling space.",
+        next_steps="Interview 20 r/LocalLLaMA users about their setup pain, then run a concierge pilot with 5 early adopters.",
         evidence_links=[pp.source_url],
         markdown_content="# DevFlow LLM\n\nFull pitch brief here that is definitely more than one hundred characters long to satisfy the Pydantic validation rules. We need enough text to describe the product, the problem it solves, and why it is better than the competition.",
+    )
+
+    critique = Critique(
+        idea_id=idea.id,
+        reasoning_trace="Tagline is 5 words. URLs check out. Target user is a demographic, not a contained fire.",
+        rubric=CritiqueRubric(
+            all_claims_evidence_backed=True,
+            no_hallucinated_source_urls=True,
+            tagline_under_12_words=True,
+            target_is_contained_fire=False,
+            competition_embraced_with_thesis=True,
+            unscalable_acquisition_concrete=True,
+            gtm_leads_with_manual_recruitment=True,
+        ),
+        all_pass=False,
+        approval_status="revise",
+        failing_checks=["target_is_contained_fire"],
+        target_agent="idea_generator",
+        revision_feedback="Target user is a demographic, not a contained community. Redefine as a specific reachable group.",
     )
 
     patch = {
@@ -551,22 +611,8 @@ if __name__ == "__main__":
         "ideas": [idea],
         "scored_ideas": [scored],
         "pitch_briefs": [brief],
-        "critique": Critique(
-            idea_id=idea.id,
-            rubric=CriticRubric(
-                all_claims_evidence_backed=True,
-                target_user_is_specific_person=True,
-                competitive_analysis_includes_behavior=True,
-                honest_risk_disclosure=True,
-                discovery_questions_are_open_ended=True,
-                tagline_under_12_words=True,
-                go_to_market_concrete=True,
-            ),
-            all_pass=True,
-            approval_status=CriticStatus.APPROVED,
-            target_agent=TargetAgent.PITCH_WRITER,
-            revision_feedback="Excellent work."
-        ),
+        "critique": critique,
+        "critiques": [critique],
         "current_stage": PipelineStage.COMPLETED,
     }
     state = state.model_copy(update=patch)
@@ -576,6 +622,7 @@ if __name__ == "__main__":
     print(f"   Domain      : {state.domain}")
     print(f"   Pain points : {len(state.filtered_pain_points)} (passed rubric)")
     print(f"   Ideas       : {len(state.ideas)}")
-    print(f"   Pursue      : {sum(1 for s in state.scored_ideas if s.verdict == Verdict.PURSUE)}")
+    print(f"   Pursue      : {sum(1 for s in state.scored_ideas if s.verdict == 'pursue')}")
     print(f"   Is complete : {state.is_complete}")
     print(f"   Can revise  : {state.can_revise}")
+    print(f"   Revision cnt: {state.get_revision_count(idea.id)}")

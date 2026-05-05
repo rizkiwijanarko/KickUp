@@ -16,9 +16,17 @@ import time
 from dataclasses import dataclass
 from typing import Iterator
 
+import diskcache
 import requests
 
+from src.config import settings
+
 logger = logging.getLogger(__name__)
+
+# Disk-backed cache for Reddit JSON responses
+_CACHE = diskcache.Cache(settings.cache_dir)
+_TTL_S: int = settings.cache_ttl_hours * 3600
+_MISSING = object()
 
 # ------------------------------------------------------------------
 # Search parameters (locked by design)
@@ -116,7 +124,18 @@ class ScrapedComment:
 # Low-level HTTP helpers
 # ------------------------------------------------------------------
 def _make_request(url: str, retries: int = 2) -> dict | list | None:
-    """GET a Reddit JSON endpoint with automatic delay + retry."""
+    """GET a Reddit JSON endpoint with automatic delay + retry, cached via diskcache.
+
+    We key purely on the URL since all requests are GETs to Reddit's
+    `.json` endpoints. Successful JSON responses are cached for
+    ``settings.cache_ttl_hours`` (default 24h) to avoid repeatedly
+    hitting Reddit during development.
+    """
+    cache_key = ("reddit_json", url)
+    cached = _CACHE.get(cache_key, default=_MISSING)
+    if cached is not _MISSING:
+        return cached
+
     for attempt in range(retries + 1):
         try:
             time.sleep(_REQUEST_DELAY_S)
@@ -126,9 +145,13 @@ def _make_request(url: str, retries: int = 2) -> dict | list | None:
             }
             r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 404:
+                # Cache 404s as None to avoid repeated misses
+                _CACHE.set(cache_key, None, expire=_TTL_S)
                 return None
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            _CACHE.set(cache_key, data, expire=_TTL_S)
+            return data
         except requests.HTTPError as e:
             logger.warning(f"Reddit HTTP error {r.status_code} for {url}: {e}")
         except Exception as e:

@@ -8,16 +8,16 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import get_llm
+from src.llm.client import coerce_rubric_bools, extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
     DemandRubric,
+    FatalFlaw,
     FeasibilityRubric,
     NoveltyRubric,
     PipelineStage,
     ScoredIdea,
     VentureForgeState,
-    Verdict,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
-    llm = get_llm(temperature=0.1, max_tokens=4096)
+    llm = get_llm(temperature=0.1, max_tokens=4096, reasoning=True)
     messages = [
         SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state)),
@@ -78,23 +78,13 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
 
     logger.info(f"[scorer] LLM responded in {time.monotonic()-start:.1f}s")
 
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, dict) and "scored_ideas" in parsed:
-            return parsed["scored_ideas"]
-        return parsed if isinstance(parsed, list) else []
-    except json.JSONDecodeError as e:
-        logger.error(f"[scorer] JSON parse error: {e}")
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error("[scorer] JSON extraction failed")
         return []
+    if isinstance(parsed, dict) and "scored_ideas" in parsed:
+        return parsed["scored_ideas"]
+    return parsed if isinstance(parsed, list) else []
 
 
 def run(state: VentureForgeState) -> dict:
@@ -111,29 +101,38 @@ def run(state: VentureForgeState) -> dict:
 
     for raw in raw_scores:
         try:
-            # Re-calculate yes_count to ensure it's accurate
-            f_rubric = FeasibilityRubric(**raw["feasibility_rubric"])
-            d_rubric = DemandRubric(**raw["demand_rubric"])
-            n_rubric = NoveltyRubric(**raw["novelty_rubric"])
-            
+            # Coerce "yes"/"no" strings to bools and re-calculate yes_count
+            f_rubric = FeasibilityRubric(**coerce_rubric_bools(raw["feasibility_rubric"]))
+            d_rubric = DemandRubric(**coerce_rubric_bools(raw["demand_rubric"]))
+            n_rubric = NoveltyRubric(**coerce_rubric_bools(raw["novelty_rubric"]))
+
             yes_count = sum([
+                f_rubric.can_be_solved_manually_first,
+                f_rubric.has_schlep_or_unsexy_advantage,
                 f_rubric.can_2_3_person_team_build_mvp_in_6_months,
-                f_rubric.uses_only_existing_proven_tech,
-                f_rubric.no_special_regulatory_requirements,
                 d_rubric.addresses_at_least_2_pain_points,
                 d_rubric.is_painkiller_not_vitamin,
-                d_rubric.target_user_clearly_defined,
+                d_rubric.has_clear_vein_of_early_adopters,
                 n_rubric.differentiated_from_current_behavior,
-                n_rubric.leverages_unique_insight,
+                n_rubric.has_path_out_of_niche,
             ])
 
+            raw_flaws = raw.get("fatal_flaws", [])
+            fatal_flaws = [FatalFlaw(**f) for f in raw_flaws if isinstance(f, dict)]
+
+            # LLM may return either 'id' (echoing input) or 'idea_id'
+            idea_id = raw.get("idea_id") or raw.get("id")
+            if not idea_id:
+                continue
+
             scored = ScoredIdea(
-                idea_id=raw["idea_id"],
+                idea_id=idea_id,
+                reasoning_trace=raw.get("reasoning_trace", ""),
                 feasibility_rubric=f_rubric,
                 demand_rubric=d_rubric,
                 novelty_rubric=n_rubric,
                 core_assumption=raw["core_assumption"],
-                fatal_flaws=raw.get("fatal_flaws", []),
+                fatal_flaws=fatal_flaws,
                 yes_count=yes_count,
                 verdict=raw["verdict"],
                 one_risk=raw["one_risk"],
@@ -148,8 +147,25 @@ def run(state: VentureForgeState) -> dict:
     for i, s in enumerate(scored_ideas):
         s.rank = i + 1
 
-    return {
+    # Verdict counts for logging
+    pursue = sum(1 for s in scored_ideas if s.verdict == "pursue")
+    explore = sum(1 for s in scored_ideas if s.verdict == "explore")
+    park = sum(1 for s in scored_ideas if s.verdict == "park")
+
+    patch = {
         "scored_ideas": scored_ideas,
         "current_stage": PipelineStage.SCORING,
         "next_node": "orchestrator",
     }
+    patch.update(
+        state.add_event(
+            agent="scorer",
+            stage=PipelineStage.SCORING,
+            kind="info",
+            message=(
+                f"Scored {len(scored_ideas)} ideas → "
+                f"{pursue} pursue / {explore} explore / {park} park."
+            ),
+        )
+    )
+    return patch

@@ -7,13 +7,11 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import get_llm
+from src.llm.client import extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
-    CompetitiveLandscape,
     PipelineStage,
     PitchBrief,
-    ValidationPlan,
     VentureForgeState,
 )
 
@@ -43,7 +41,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
             "key_features": idea.key_features,
             "yes_count": s.yes_count,
             "core_assumption": s.core_assumption,
-            "fatal_flaws": s.fatal_flaws,
+            "fatal_flaws": [f.model_dump() for f in s.fatal_flaws],
             "one_risk": s.one_risk,
         })
 
@@ -69,7 +67,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
-    llm = get_llm(temperature=0.4, max_tokens=4096)
+    llm = get_llm(temperature=0.4, max_tokens=4096, reasoning=False)
     messages = [
         SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state)),
@@ -85,33 +83,33 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
 
     logger.info(f"[pitch_writer] LLM responded in {time.monotonic()-start:.1f}s")
 
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, dict) and "pitch_briefs" in parsed:
-            return parsed["pitch_briefs"]
-        return parsed if isinstance(parsed, list) else []
-    except json.JSONDecodeError as e:
-        logger.error(f"[pitch_writer] JSON parse error: {e}")
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error(f"[pitch_writer] JSON extraction failed (content len={len(content)}, first 80={content[:80]!r})")
         return []
+
+    if isinstance(parsed, dict) and "pitch_briefs" in parsed:
+        return parsed["pitch_briefs"]
+    return parsed if isinstance(parsed, list) else []
 
 
 def run(state: VentureForgeState) -> dict:
     if not state.scored_ideas:
         logger.warning("[pitch_writer] no scored ideas to write briefs for")
-        return {
+        patch = {
             "pitch_briefs": [],
             "current_stage": PipelineStage.WRITING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="pitch_writer",
+                stage=PipelineStage.WRITING,
+                kind="warning",
+                message="No scored ideas available for writing pitch briefs.",
+            )
+        )
+        return patch
 
     raw_briefs = _invoke_llm(state)
     briefs: list[PitchBrief] = []
@@ -125,23 +123,31 @@ def run(state: VentureForgeState) -> dict:
                 problem=raw["problem"],
                 solution=raw["solution"],
                 target_user=raw["target_user"],
-                competitive_landscape=CompetitiveLandscape(**raw["competitive_landscape"]),
-                differentiation=raw["differentiation"],
-                validation_plan=ValidationPlan(**raw["validation_plan"]),
+                market_opportunity=raw["market_opportunity"],
                 business_model=raw["business_model"],
                 go_to_market=raw["go_to_market"],
                 key_risk=raw["key_risk"],
+                next_steps="\n".join(raw["next_steps"]) if isinstance(raw["next_steps"], list) else raw["next_steps"],
                 evidence_links=raw.get("evidence_links", []),
                 markdown_content=raw["markdown_content"],
-                revision_count=state.revision_count,
+                revision_count=state.get_revision_count(raw["idea_id"]),
             )
             briefs.append(brief)
         except Exception as e:
             logger.debug(f"[pitch_writer] skipping malformed pitch brief: {e}")
             continue
 
-    return {
+    patch = {
         "pitch_briefs": briefs,
         "current_stage": PipelineStage.WRITING,
         "next_node": "orchestrator",
     }
+    patch.update(
+        state.add_event(
+            agent="pitch_writer",
+            stage=PipelineStage.WRITING,
+            kind="info",
+            message=f"Wrote {len(briefs)} pitch briefs for top scored ideas.",
+        )
+    )
+    return patch

@@ -19,34 +19,104 @@ def orchestrator(state: VentureForgeState) -> dict:
     Returns a dict patch for state update.
     """
     stage = state.current_stage
-    revision = state.revision_count > 0
 
     # --- Determine next stage ---
     if not state.pain_points:
-        return {"current_stage": PipelineStage.MINING, "next_node": "pain_point_miner"}
+        patch = {"current_stage": PipelineStage.MINING, "next_node": "pain_point_miner"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.MINING,
+                kind="info",
+                message="Routing to pain_point_miner (no pain points yet).",
+            )
+        )
+        return patch
 
     if not state.ideas:
-        return {"current_stage": PipelineStage.GENERATING, "next_node": "idea_generator"}
+        patch = {"current_stage": PipelineStage.GENERATING, "next_node": "idea_generator"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.GENERATING,
+                kind="info",
+                message="Routing to idea_generator (no ideas yet).",
+            )
+        )
+        return patch
 
     if not state.scored_ideas:
-        return {"current_stage": PipelineStage.SCORING, "next_node": "scorer"}
+        patch = {"current_stage": PipelineStage.SCORING, "next_node": "scorer"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.SCORING,
+                kind="info",
+                message="Routing to scorer (no scored ideas yet).",
+            )
+        )
+        return patch
 
     if not state.pitch_briefs:
-        return {"current_stage": PipelineStage.WRITING, "next_node": "pitch_writer"}
+        patch = {"current_stage": PipelineStage.WRITING, "next_node": "pitch_writer"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.WRITING,
+                kind="info",
+                message="Routing to pitch_writer (no pitch briefs yet).",
+            )
+        )
+        return patch
 
     if state.critique is None:
-        return {"current_stage": PipelineStage.CRITIQUING, "next_node": "critic"}
+        patch = {"current_stage": PipelineStage.CRITIQUING, "next_node": "critic"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.CRITIQUING,
+                kind="info",
+                message="Routing to critic (no critique yet).",
+            )
+        )
+        return patch
 
     # --- Reflection loop: we have a critique ---
     if not state.critique.all_pass and state.can_revise:
         # Loop back to target worker for revision
-        target = state.critique.target_agent.value
+        target = state.critique.target_agent
         patch = state.bump_revision(state.critique)
         patch.update(state.reset_for_revision(target))
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.REVISING,
+                kind="info",
+                message=(
+                    f"Revision requested by critic for idea {state.critique.idea_id} "
+                    f"→ target_agent={target}."
+                ),
+                idea_id=state.critique.idea_id,
+            )
+        )
         return patch
 
     # --- Done or max revisions reached ---
-    return state.mark_completed()
+    summary = (
+        f"Pipeline completed with {len(state.pain_points)} pain points, "
+        f"{len(state.ideas)} ideas, {len(state.scored_ideas)} scored ideas, "
+        f"and {len(state.pitch_briefs)} pitch briefs."
+    )
+    patch = state.mark_completed()
+    patch.update(
+        state.add_event(
+            agent="orchestrator",
+            stage=PipelineStage.COMPLETED,
+            kind="info",
+            message=summary,
+        )
+    )
+    return patch
 
 
 # Worker wrapper nodes (LangGraph calls these, they call the agent logic)

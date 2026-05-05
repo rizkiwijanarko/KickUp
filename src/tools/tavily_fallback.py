@@ -14,11 +14,17 @@ import re
 import time
 from typing import Any
 
+import diskcache
 import requests
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Disk-backed cache for Tavily community discovery
+_CACHE = diskcache.Cache(settings.cache_dir)
+_TTL_S: int = settings.cache_ttl_hours * 3600
+_MISSING = object()
 
 # ------------------------------------------------------------------
 # Constants
@@ -84,6 +90,12 @@ def search_communities(domain: str) -> list[str]:
     if not settings.tavily_enabled:
         logger.info("[tavily] fallback skipped — TAVILY_API_KEY not set")
         return []
+
+    cache_key = ("tavily_communities", domain.strip().lower())
+    cached = _CACHE.get(cache_key, default=_MISSING)
+    if cached is not _MISSING:
+        logger.info(f"[tavily] cache hit for domain='{domain}'")
+        return list(cached)
 
     query = f'site:reddit.com "{domain}" frustration OR complaint OR problem OR hate community subreddit'
     payload: dict[str, Any] = {

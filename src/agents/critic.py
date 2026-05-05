@@ -7,14 +7,12 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import get_llm
+from src.llm.client import coerce_rubric_bools, extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
-    CriticRubric,
-    CriticStatus,
     Critique,
+    CritiqueRubric,
     PipelineStage,
-    TargetAgent,
     VentureForgeState,
 )
 
@@ -32,19 +30,29 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         return "No pitch briefs to review."
 
     brief = state.pitch_briefs[0]
-    
+    revision_count = state.get_revision_count(brief.idea_id)
+
+    # Look up the Scorer output for this pitch so the Critic can cross-reference
+    scored_idea = None
+    for s in state.scored_ideas:
+        if s.idea_id == brief.idea_id:
+            scored_idea = s.model_dump(mode="json")
+            break
+
     user_text = (
         f"Domain: {state.domain}\n"
-        f"Current Revision Count: {state.revision_count}\n\n"
+        f"Current Revision Count: {revision_count}\n\n"
         f"PITCH BRIEF TO REVIEW:\n{brief.markdown_content}\n\n"
+        f"SCORER OUTPUT FOR THIS IDEA:\n{json.dumps(scored_idea, indent=2) if scored_idea else 'Not found'}\n\n"
         "Provide a brutal, honest critique using the binary rubric. "
-        "If it fails any check, specify which worker should fix it."
+        "If it fails any check, specify which worker should fix it. "
+        "Ensure to only return a JSON object."
     )
     return user_text
 
 
 def _invoke_llm(state: VentureForgeState) -> dict:
-    llm = get_llm(temperature=0.2, max_tokens=2048)
+    llm = get_llm(temperature=0.2, max_tokens=2048, reasoning=True)
     messages = [
         SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state)),
@@ -60,84 +68,136 @@ def _invoke_llm(state: VentureForgeState) -> dict:
 
     logger.info(f"[critic] LLM responded in {time.monotonic()-start:.1f}s")
 
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"[critic] JSON parse error: {e}")
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error("[critic] JSON extraction failed")
         return {}
+    return parsed
 
 
 def run(state: VentureForgeState) -> dict:
     if not state.pitch_briefs:
         logger.warning("[critic] no pitch briefs to critique")
-        return {
+        patch = {
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="critic",
+                stage=PipelineStage.CRITIQUING,
+                kind="warning",
+                message="No pitch briefs available for critique.",
+            )
+        )
+        return patch
 
-    # Auto-approve if max revisions reached
-    if state.revision_count >= state.max_revisions:
-        rubric = CriticRubric(
+    # Auto-approve if max revisions reached for this pitch
+    brief = state.pitch_briefs[0]
+    if state.get_revision_count(brief.idea_id) >= state.max_revisions:
+        rubric = CritiqueRubric(
             all_claims_evidence_backed=True,
             no_hallucinated_source_urls=True,
-            target_user_is_specific_person=True,
-            competitive_analysis_includes_behavior=True,
-            honest_risk_disclosure=True,
-            discovery_questions_are_open_ended=True,
             tagline_under_12_words=True,
-            go_to_market_concrete=True,
+            target_is_contained_fire=True,
+            competition_embraced_with_thesis=True,
+            unscalable_acquisition_concrete=True,
+            gtm_leads_with_manual_recruitment=True,
         )
         critique = Critique(
-            idea_id=state.pitch_briefs[0].idea_id,
+            idea_id=brief.idea_id,
+            reasoning_trace="Max revisions reached — approved by default.",
             rubric=rubric,
             all_pass=True,
-            approval_status=CriticStatus.APPROVED,
-            target_agent=TargetAgent.PITCH_WRITER,
+            approval_status="approved",
+            target_agent="pitch_writer",
             revision_feedback="Max revisions reached — approved by default.",
         )
-        return {
+        patch = {
             "critique": critique,
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="critic",
+                stage=PipelineStage.CRITIQUING,
+                kind="info",
+                message=(
+                    f"Auto-approved pitch for idea {brief.idea_id} after "
+                    f"reaching max revisions ({state.max_revisions})."
+                ),
+                idea_id=brief.idea_id,
+            )
+        )
+        return patch
 
     raw = _invoke_llm(state)
     if not raw:
         # Fallback to simple revision if LLM fails
-        return {
+        patch = {
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="critic",
+                stage=PipelineStage.CRITIQUING,
+                kind="warning",
+                message="Critic LLM invocation failed; keeping previous state.",
+            )
+        )
+        return patch
 
     try:
-        rubric = CriticRubric(**raw["rubric"])
+        # Unwrap if LLM returned {"critique": {...}}
+        if "critique" in raw and isinstance(raw["critique"], dict):
+            raw = raw["critique"]
+
+        rubric = CritiqueRubric(**coerce_rubric_bools(raw["rubric"]))
         critique = Critique(
             idea_id=state.pitch_briefs[0].idea_id,
+            reasoning_trace=raw.get("reasoning_trace", ""),
             rubric=rubric,
             all_pass=raw["all_pass"],
             approval_status=raw["approval_status"],
             failing_checks=raw.get("failing_checks", []),
-            target_agent=TargetAgent(raw["target_agent"]),
-            revision_feedback=raw["revision_feedback"],
+            target_agent=raw["target_agent"],
+            revision_feedback="\n".join(raw["revision_feedback"]) if isinstance(raw["revision_feedback"], list) else raw["revision_feedback"],
         )
     except Exception as e:
         logger.error(f"[critic] malformed critique: {e}")
-        return {
+        patch = {
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="critic",
+                stage=PipelineStage.CRITIQUING,
+                kind="error",
+                message="Critic produced a malformed critique; keeping previous state.",
+            )
+        )
+        return patch
 
-    return {
+    # Normal successful critique
+    message = (
+        "Approved pitch" if critique.all_pass else
+        f"Requested revision for idea {critique.idea_id} → target_agent={critique.target_agent}"
+    )
+    patch = {
         "critique": critique,
         "current_stage": PipelineStage.CRITIQUING,
         "next_node": "orchestrator",
     }
+    patch.update(
+        state.add_event(
+            agent="critic",
+            stage=PipelineStage.CRITIQUING,
+            kind="info",
+            message=message,
+            idea_id=critique.idea_id,
+        )
+    )
+    return patch

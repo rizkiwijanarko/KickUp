@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import get_llm
+from src.llm.client import extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import Idea, PipelineStage, VentureForgeState
 
@@ -71,7 +71,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
     """Call LLM, parse JSON, return raw idea dicts."""
-    llm = get_llm(temperature=0.7, max_tokens=4096)
+    llm = get_llm(temperature=0.7, max_tokens=4096, reasoning=False)
     messages = [
         SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state)),
@@ -87,20 +87,9 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
 
     logger.info(f"[idea_generator] LLM responded in {time.monotonic()-start:.1f}s")
 
-    # Strip fences
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"[idea_generator] JSON parse error: {e}")
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error("[idea_generator] JSON extraction failed")
         return []
 
     ideas = parsed.get("ideas") if isinstance(parsed, dict) else parsed if isinstance(parsed, list) else []
@@ -154,11 +143,20 @@ def run(state: VentureForgeState) -> dict:
     pps = state.filtered_pain_points
     if not pps:
         logger.warning("[idea_generator] no pain points available — returning empty")
-        return {
+        patch = {
             "ideas": [],
             "current_stage": PipelineStage.GENERATING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="idea_generator",
+                stage=PipelineStage.GENERATING,
+                kind="warning",
+                message="No pain points available to generate ideas from.",
+            )
+        )
+        return patch
 
     valid_ids = {pp.id for pp in pps}
     raw_ideas = _invoke_llm(state)
@@ -178,8 +176,20 @@ def run(state: VentureForgeState) -> dict:
         f"(required <= {count} with >=2 real pain point refs each)"
     )
 
-    return {
+    patch = {
         "ideas": final,
         "current_stage": PipelineStage.GENERATING,
         "next_node": "orchestrator",
     }
+    patch.update(
+        state.add_event(
+            agent="idea_generator",
+            stage=PipelineStage.GENERATING,
+            kind="info",
+            message=(
+                f"Generated {len(final)} ideas (requested {count}) "
+                f"addressing ≥2 validated pain points each."
+            ),
+        )
+    )
+    return patch

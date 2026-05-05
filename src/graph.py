@@ -11,6 +11,9 @@ Usage:
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from src.agents.orchestrator import (
@@ -21,6 +24,7 @@ from src.agents.orchestrator import (
     pitch_writer,
     scorer,
 )
+from src.config import settings
 from src.state.schema import PipelineStage, VentureForgeState
 
 
@@ -41,7 +45,11 @@ def route_after_critic(state: VentureForgeState) -> str:
 
 
 def build_graph() -> StateGraph:
-    """Build and return the compiled LangGraph StateGraph."""
+    """Build and return the compiled LangGraph StateGraph.
+
+    The compiled graph is configured with a SQLite checkpointer so that
+    runs can be resumed/inspected via LangGraph's persistence layer.
+    """
     workflow = StateGraph(VentureForgeState)
 
     # Register nodes
@@ -83,7 +91,13 @@ def build_graph() -> StateGraph:
         },
     )
 
-    return workflow.compile()
+    # Configure SQLite checkpointer under the configured cache directory
+    cache_dir = Path(settings.cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    db_path = cache_dir / "langgraph.sqlite"
+    checkpointer = SqliteSaver.from_conn_string(f"sqlite:///{db_path}")
+
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # Convenience: pre-compiled graph instance

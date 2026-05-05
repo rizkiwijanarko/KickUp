@@ -31,6 +31,15 @@ if TYPE_CHECKING:
 #
 _PROMPTS: dict[str, str] = {}
 
+# Known agent prompt sections (H2 headings that are actual agent IDs)
+_AGENT_IDS: set[str] = {
+    "pain_point_miner",
+    "idea_generator",
+    "scorer",
+    "pitch_writer",
+    "critic",
+}
+
 
 def _load_prompts() -> dict[str, str]:
     """Parse PROMPTS.md into {section_name: prompt_text}."""
@@ -42,8 +51,10 @@ def _load_prompts() -> dict[str, str]:
         return {}
 
     text = prompts_file.read_text(encoding="utf-8")
-    # Split on H2 headers
-    pattern = re.compile(r"^##\s+(\w[\w_\-]*)\s*\n", re.MULTILINE)
+    # Build a regex that only matches H2 headings for known agent IDs.
+    # This avoids splitting on sub-headings like ## Input inside a prompt.
+    agent_pattern = "|".join(re.escape(a) for a in _AGENT_IDS)
+    pattern = re.compile(rf"^##\s+({agent_pattern})\s*\n", re.MULTILINE)
     parts = pattern.split(text)
     # parts[0] = preamble (before first ##), parts[1] = name, parts[2] = body, ...
     prompts: dict[str, str] = {}

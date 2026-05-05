@@ -21,7 +21,7 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.config import settings
-from src.llm.client import get_llm
+from src.llm.client import coerce_rubric_bools, coerce_yes_no, extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import DataSource, PainPoint, PainPointRubric, PipelineStage, VentureForgeState
 from src.tools.reddit_scraper import (
@@ -90,7 +90,7 @@ def _llm_extract_pain_points(
     comments: list[ScrapedComment],
 ) -> list[PainPoint]:
     """Call the LLM and parse structured pain points."""
-    llm = get_llm(temperature=0.2, max_tokens=4096)
+    llm = get_llm(temperature=0.2, max_tokens=4096, reasoning=False)
     messages = [
         SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state, comments)),
@@ -106,21 +106,18 @@ def _llm_extract_pain_points(
 
     logger.info(f"[pain_point_miner] LLM responded in {time.monotonic()-start:.1f}s")
 
-    # Strip markdown code fences if present
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    try:
-        raw_list = json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"[pain_point_miner] JSON parse error: {e}")
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error("[pain_point_miner] JSON extraction failed")
         return []
+
+    # Handle both flat array and {"pain_points": [...]} wrapper
+    if isinstance(parsed, dict) and "pain_points" in parsed:
+        raw_list = parsed["pain_points"]
+    elif isinstance(parsed, list):
+        raw_list = parsed
+    else:
+        raw_list = []
 
     if not isinstance(raw_list, list):
         logger.warning("[pain_point_miner] LLM did not return a JSON array")
@@ -135,8 +132,8 @@ def _llm_extract_pain_points(
                 id=item.get("id") or uuid4(),
                 title=item["title"],
                 description=item["description"],
-                rubric=PainPointRubric(**item["rubric"]),
-                passes_rubric=item["passes_rubric"],
+                rubric=PainPointRubric(**coerce_rubric_bools(item["rubric"])),
+                passes_rubric=coerce_yes_no(item["passes_rubric"]),
                 source_url=item["source_url"],
                 raw_quote=item["raw_quote"],
                 source=DataSource.REDDIT,
@@ -240,11 +237,20 @@ def run(state: VentureForgeState) -> dict:
 
     if not comments:
         logger.warning("[pain_point_miner] zero comments scraped — returning empty")
-        return {
+        patch = {
             "pain_points": [],
             "current_stage": PipelineStage.MINING,
             "next_node": "orchestrator",
         }
+        patch.update(
+            state.add_event(
+                agent="pain_point_miner",
+                stage=PipelineStage.MINING,
+                kind="warning",
+                message=f"No Reddit comments scraped for domain '{domain}'.",
+            )
+        )
+        return patch
 
     # --- Step 1: LLM extraction ---
     extracted = _llm_extract_pain_points(state, comments)
@@ -266,8 +272,20 @@ def run(state: VentureForgeState) -> dict:
         if addressed:
             final = addressed[:max_pp]
 
-    return {
+    patch = {
         "pain_points": final,
         "current_stage": PipelineStage.MINING,
         "next_node": "orchestrator",
     }
+    patch.update(
+        state.add_event(
+            agent="pain_point_miner",
+            stage=PipelineStage.MINING,
+            kind="info",
+            message=(
+                f"Scraped {len(comments)} Reddit comments "+
+                f"→ {len(final)} validated pain points for domain '{domain}'."
+            ),
+        )
+    )
+    return patch

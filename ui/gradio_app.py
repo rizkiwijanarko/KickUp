@@ -9,9 +9,19 @@ from typing import AsyncGenerator
 
 import gradio as gr
 
-# Placeholder for actual imports when agents are implemented
-# from src.main import run_pipeline
-# from src.state.schema import VentureState
+from src.config import settings
+from src.run_controller import (
+    RunInProgressError,
+    start_run,
+    poll_state,
+    request_cancel,
+    is_cancel_requested,
+)
+from src.state.schema import PipelineStage, VentureForgeState
+from src.tools.reddit_scraper import resolve_domain
+
+
+CURRENT_RUN_ID: str | None = None
 
 
 def format_agent_log(agent_name: str, status: str, message: str) -> str:
@@ -26,82 +36,229 @@ def format_agent_log(agent_name: str, status: str, message: str) -> str:
     return f"[{timestamp}] {emoji} **{agent_name}**: {message}"
 
 
-async def run_venture_pipeline(domain: str, progress: gr.Progress) -> AsyncGenerator:
+async def run_venture_pipeline(
+    domain: str,
+    max_pain_points_val: int,
+    ideas_per_run_val: int,
+    progress: gr.Progress,
+) -> AsyncGenerator:
+    """Run the real VentureForge pipeline and yield live UI updates.
+
+    Uses ``src.run_controller`` to start a background run and polls the
+    latest VentureForgeState from the LangGraph SQLite checkpointer.
     """
-    Run the VentureForge pipeline and yield updates for the Gradio UI.
-    This is a placeholder implementation - will be replaced with actual agent calls.
-    """
-    logs = []
-    stats = {
-        "pain_points": 0,
-        "clusters": 0,
-        "ideas": 0,
-        "validated": 0,
-        "pitch_briefs": 0,
-    }
+    logs: list[str] = []
 
-    # Simulate pipeline stages
-    stages = [
-        ("Orchestrator", "Initializing pipeline...", 0.05),
-        ("Trend Scanner", "Scanning Google Trends and HN...", 0.15),
-        ("Pain Point Miner", "Mining Reddit for pain points...", 0.25),
-        ("Market Research", "Gathering market data...", 0.35),
-        ("Competitor Intel", "Analyzing competitors...", 0.45),
-        ("Clustering Agent", "Clustering pain points...", 0.60),
-        ("Idea Generator", "Generating startup ideas...", 0.70),
-        ("Feasibility Agent", "Checking technical feasibility...", 0.75),
-        ("Market Validator", "Validating market demand...", 0.80),
-        ("Business Model Agent", "Analyzing business models...", 0.85),
-        ("Risk Scoring Agent", "Calculating risk scores...", 0.90),
-        ("Pitch Writer", "Writing pitch briefs...", 0.95),
-        ("Critic Agent", "Reviewing and refining...", 0.98),
-        ("Orchestrator", "Pipeline complete!", 1.0),
-    ]
+    # Start a new run (one at a time)
+    global CURRENT_RUN_ID
 
-    for agent_name, message, pct in stages:
-        logs.append(format_agent_log(agent_name, "running", message))
-        progress(pct, desc=f"Running {agent_name}...")
-
-        # Update stats based on progress (simulated)
-        if pct >= 0.25:
-            stats["pain_points"] = int(47 * (pct / 0.45))
-        if pct >= 0.60:
-            stats["clusters"] = 8
-        if pct >= 0.70:
-            stats["ideas"] = int(24 * ((pct - 0.70) / 0.20))
-        if pct >= 0.90:
-            stats["validated"] = stats["ideas"]
-        if pct >= 0.98:
-            stats["pitch_briefs"] = 5
-
-        # Update previous agent to completed
-        if len(logs) > 1:
-            prev_log = logs[-2]
-            if "🔄" in prev_log:
-                logs[-2] = prev_log.replace("🔄", "✅").replace("running", "completed")
-
+    try:
+        run_id = start_run(
+            domain,
+            max_pain_points=int(max_pain_points_val),
+            ideas_per_run=int(ideas_per_run_val),
+        )
+        CURRENT_RUN_ID = run_id
+    except RunInProgressError as e:
+        logs.append(format_agent_log("Orchestrator", "error", str(e)))
         yield {
             logs_display: "\n\n".join(logs[::-1]),
-            pain_points_stat: stats["pain_points"],
-            clusters_stat: stats["clusters"],
-            ideas_stat: stats["ideas"],
-            validated_stat: stats["validated"],
-            pitch_briefs_stat: stats["pitch_briefs"],
+            pain_points_stat: 0,
+            clusters_stat: 0,
+            ideas_stat: 0,
+            validated_stat: 0,
+            pitch_briefs_stat: 0,
+            results_output: "{}",
+        }
+        return
+
+    logs.append(
+        format_agent_log(
+            "Orchestrator",
+            "running",
+            f"Started run_id={run_id!r} for domain '{domain}'.",
+        )
+    )
+
+    state: VentureForgeState | None = None
+    while True:
+        progress(0.0, desc="Polling pipeline state...")
+        # If user requested cancellation, stop updating UI after
+        # showing the latest available state.
+        if is_cancel_requested(run_id):
+            break
+
+        state = poll_state(run_id)
+        if state is None:
+            # No checkpoints yet — keep waiting
+            yield {
+                logs_display: "\n\n".join(logs[::-1]),
+                pain_points_stat: 0,
+                clusters_stat: 0,
+                ideas_stat: 0,
+                validated_stat: 0,
+                pitch_briefs_stat: 0,
+                results_output: "{}",
+                pitch_display: "_Initializing pipeline..._",
+                under_the_hood: "_Awaiting first checkpoint..._",
+            }
+            await asyncio.sleep(0.5)
+            continue
+
+        # Live stats
+        pain_points_count = len(state.pain_points)
+        ideas_count = len(state.ideas)
+        scored_count = len(state.scored_ideas)
+        briefs_count = len(state.pitch_briefs)
+        revisions_count = sum(state.revision_counts.values())
+
+        # Render events into a log (last 40 events)
+        rendered_events: list[str] = []
+        for ev in reversed(state.events[-40:]):
+            ts = ev.timestamp.astimezone().strftime("%H:%M:%S")
+            rendered_events.append(
+                f"[{ts}] **{ev.agent}** ({ev.stage.value}): {ev.message}"
+            )
+        logs_markdown = "\n\n".join(rendered_events) if rendered_events else "_Waiting for agent events..._"
+
+        # Approximate progress from stage order
+        stage_order = [
+            PipelineStage.MINING,
+            PipelineStage.GENERATING,
+            PipelineStage.SCORING,
+            PipelineStage.WRITING,
+            PipelineStage.CRITIQUING,
+            PipelineStage.REVISING,
+            PipelineStage.COMPLETED,
+            PipelineStage.FAILED,
+            PipelineStage.CANCELLED,
+        ]
+        try:
+            idx = stage_order.index(state.current_stage)
+            pct = idx / max(1, len(stage_order) - 1)
+        except ValueError:
+            pct = 0.0
+        progress(pct, desc=f"Stage: {state.current_stage.value}")
+
+        # Final summary JSON on terminal
+        is_terminal = state.current_stage in (
+            PipelineStage.COMPLETED,
+            PipelineStage.FAILED,
+            PipelineStage.CANCELLED,
+        )
+        # Build evidence & rubrics markdown for top idea and one parked idea
+        evidence_lines: list[str] = []
+        if state.filtered_pain_points:
+            evidence_lines.append("### 🔍 Evidence from Reddit (sample)")
+            for pp in state.filtered_pain_points[:3]:
+                excerpt = pp.raw_quote.strip()
+                if len(excerpt) > 160:
+                    excerpt = excerpt[:157] + "..."
+                evidence_lines.append(
+                    f"- **{pp.title}** – {excerpt} [Source]({pp.source_url})"
+                )
+            evidence_lines.append("")
+
+        # Helper to render a rubric block
+        def _rubric_block(label: str, scored) -> list[str]:
+            if scored is None:
+                return []
+            lines: list[str] = [f"### {label}: {scored.verdict.upper()} (yes_count={scored.yes_count})"]
+            lines.append("**Feasibility**")
+            fr = scored.feasibility_rubric
+            lines.append(f"- can_be_solved_manually_first: {'✅' if fr.can_be_solved_manually_first else '❌'}")
+            lines.append(f"- has_schlep_or_unsexy_advantage: {'✅' if fr.has_schlep_or_unsexy_advantage else '❌'}")
+            lines.append(f"- can_2_3_person_team_build_mvp_in_6_months: {'✅' if fr.can_2_3_person_team_build_mvp_in_6_months else '❌'}")
+            lines.append("**Demand**")
+            dr = scored.demand_rubric
+            lines.append(f"- addresses_at_least_2_pain_points: {'✅' if dr.addresses_at_least_2_pain_points else '❌'}")
+            lines.append(f"- is_painkiller_not_vitamin: {'✅' if dr.is_painkiller_not_vitamin else '❌'}")
+            lines.append(f"- has_clear_vein_of_early_adopters: {'✅' if dr.has_clear_vein_of_early_adopters else '❌'}")
+            lines.append("**Novelty**")
+            nr = scored.novelty_rubric
+            lines.append(f"- differentiated_from_current_behavior: {'✅' if nr.differentiated_from_current_behavior else '❌'}")
+            lines.append(f"- has_path_out_of_niche: {'✅' if nr.has_path_out_of_niche else '❌'}")
+            if scored.fatal_flaws:
+                lines.append("**Fatal / major flaws**")
+                for flaw in scored.fatal_flaws:
+                    lines.append(f"- ({flaw.severity}) {flaw.flaw}")
+            lines.append("")
+            return lines
+
+        top_scored = None
+        parked_scored = None
+        if state.scored_ideas:
+            # Top idea by yes_count then rank
+            sorted_scored = sorted(
+                state.scored_ideas,
+                key=lambda s: (s.yes_count, -(s.rank or 0)),
+                reverse=True,
+            )
+            top_scored = sorted_scored[0]
+            parked = [s for s in state.scored_ideas if s.verdict == "park"]
+            if parked:
+                parked_scored = sorted(parked, key=lambda s: s.yes_count)[0]
+
+        rubric_lines: list[str] = []
+        rubric_lines.extend(_rubric_block("Top Idea", top_scored))
+        rubric_lines.extend(_rubric_block("Parked Idea", parked_scored))
+
+        pitch_md = "\n".join(evidence_lines + rubric_lines) if (evidence_lines or rubric_lines) else "_No evidence or scored ideas yet._"
+
+        if is_terminal:
+            summary = {
+                "run_id": state.run_id,
+                "current_stage": state.current_stage.value,
+                "pain_points": pain_points_count,
+                "ideas": ideas_count,
+                "scored_ideas": scored_count,
+                "pitch_briefs": briefs_count,
+                "revisions": revisions_count,
+            }
+            results_json = json.dumps(summary, indent=2)
+        else:
+            results_json = "{}"
+
+        # Build "Under the hood" markdown
+        category, subreddits = resolve_domain(state.domain)
+        uth_lines: list[str] = [
+            f"**Run ID:** `{state.run_id}`",
+            f"**Domain:** {state.domain}",
+            f"**Current stage:** `{state.current_stage.value}`",
+            f"**Resolved category:** `{category}`",
+            "**Subreddits (static map):** "
+            + ", ".join(f"r/{s}" for s in subreddits),
+            "",
+            "**LLM configuration:**",
+            f"- Reasoning base URL: `{settings.llm_base_url}`",
+            f"- Reasoning model: `{settings.llm_model}`",
+            f"- Fast base URL: `{settings.fast_llm_base_url or settings.llm_base_url}`",
+            f"- Fast model: `{settings.fast_llm_model or settings.llm_model}`",
+        ]
+        if state.agent_timings:
+            uth_lines.append("")
+            uth_lines.append("**Agent timings (seconds):**")
+            for agent_id, t in state.agent_timings.items():
+                uth_lines.append(f"- {agent_id}: {t:.2f}")
+
+        under_the_hood_md = "\n".join(uth_lines)
+
+        yield {
+            logs_display: logs_markdown,
+            pain_points_stat: pain_points_count,
+            clusters_stat: scored_count,
+            ideas_stat: ideas_count,
+            validated_stat: revisions_count,
+            pitch_briefs_stat: briefs_count,
+            results_output: results_json,
+            pitch_display: pitch_md,
+            under_the_hood: under_the_hood_md,
         }
 
-        await asyncio.sleep(0.5)  # Simulate work
+        if is_terminal or is_cancel_requested(run_id):
+            break
 
-    # Final update
-    logs[-1] = format_agent_log("Orchestrator", "completed", "Pipeline complete! ✨")
-    yield {
-        logs_display: "\n\n".join(logs[::-1]),
-        pain_points_stat: 47,
-        clusters_stat: 8,
-        ideas_stat: 24,
-        validated_stat: 24,
-        pitch_briefs_stat: 5,
-        results_output: _generate_sample_results(),
-    }
+        await asyncio.sleep(0.5)
 
 
 def _generate_sample_results() -> str:
@@ -171,13 +328,10 @@ def create_ui() -> gr.Blocks:
 
                 with gr.Accordion("Advanced Settings", open=False):
                     max_pain_points = gr.Slider(
-                        10, 100, value=50, step=5, label="Max Pain Points to Discover"
+                        10, 100, value=30, step=5, label="Max Pain Points to Discover"
                     )
-                    max_ideas = gr.Slider(
-                        5, 50, value=24, step=1, label="Max Ideas to Generate"
-                    )
-                    temperature = gr.Slider(
-                        0.0, 1.0, value=0.7, step=0.1, label="LLM Temperature"
+                    ideas_per_run = gr.Slider(
+                        1, 20, value=5, step=1, label="Ideas per Run"
                     )
 
                 run_btn = gr.Button("🚀 Run Discovery Pipeline", variant="primary", size="lg")
@@ -192,7 +346,7 @@ def create_ui() -> gr.Blocks:
                         )
                     with gr.Column():
                         clusters_stat = gr.Number(
-                            value=0, label="Clusters", interactive=False
+                            value=0, label="Scored Ideas", interactive=False
                         )
                     with gr.Column():
                         ideas_stat = gr.Number(
@@ -201,7 +355,7 @@ def create_ui() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column():
                         validated_stat = gr.Number(
-                            value=0, label="Validated", interactive=False
+                            value=0, label="Revisions", interactive=False
                         )
                     with gr.Column():
                         pitch_briefs_stat = gr.Number(
@@ -218,18 +372,23 @@ def create_ui() -> gr.Blocks:
 
         with gr.Row():
             with gr.Column():
-                gr.Markdown("### 📋 Results")
+                gr.Markdown("### 📋 Results (Summary)")
                 results_output = gr.Code(
                     language="json",
-                    label="Pipeline Output",
+                    label="Pipeline Summary",
                     value='{}',
                 )
 
             with gr.Column():
-                gr.Markdown("### 📄 Top Pitch Brief")
+                gr.Markdown("### 📄 Evidence & Rubrics")
                 pitch_display = gr.Markdown(
-                    value="_Results will appear here after pipeline completion..._"
+                    value="_Results will appear here after pipeline completion..._",
                 )
+
+        with gr.Accordion("🔧 Under the hood", open=False):
+            under_the_hood = gr.Markdown(
+                value="_Run the pipeline to see internal routing, subreddits, and LLM config..._",
+            )
 
         # Footer
         gr.Markdown("""
@@ -243,7 +402,7 @@ def create_ui() -> gr.Blocks:
         # Event handlers
         run_btn.click(
             fn=run_venture_pipeline,
-            inputs=[domain_input],
+            inputs=[domain_input, max_pain_points, ideas_per_run],
             outputs=[
                 logs_display,
                 pain_points_stat,
@@ -252,8 +411,19 @@ def create_ui() -> gr.Blocks:
                 validated_stat,
                 pitch_briefs_stat,
                 results_output,
+                pitch_display,
+                under_the_hood,
             ],
         )
+
+        def _on_stop() -> str:
+            global CURRENT_RUN_ID
+            if CURRENT_RUN_ID is not None:
+                request_cancel(CURRENT_RUN_ID)
+                return "_Stop requested. The current run will halt after the current step; partial results remain in history._"
+            return "_No active run to stop._"
+
+        stop_btn.click(fn=_on_stop, inputs=None, outputs=[logs_display])
 
     return app
 
