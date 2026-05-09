@@ -106,7 +106,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.resume:
-        print(f"🔁 Resuming VentureForge run: run_id='{args.resume}'")
+        print(f"Resuming VentureForge run: run_id='{args.resume}'")
         result = run_pipeline(
             domain=None,
             max_pain_points=None,
@@ -115,7 +115,7 @@ def main() -> None:
     else:
         if not args.domain:
             parser.error("--domain is required for new runs (omit it when using --resume)")
-        print(f"🚀 VentureForge starting: domain='{args.domain}'")
+        print(f"VentureForge starting: domain='{args.domain}'")
         result = run_pipeline(args.domain, args.max_pain_points)
 
     # Serialize final state
@@ -123,7 +123,7 @@ def main() -> None:
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
-    print(f"\n✅ Pipeline finished in stage: {result.current_stage}")
+    print(f"\nPipeline finished in stage: {result.current_stage}")
     print(f"   Run ID     : {result.run_id}")
     print(f"   Duration   : {result.agent_timings}")
     print(f"   Pain points: {len(result.pain_points)}")
@@ -131,7 +131,7 @@ def main() -> None:
     print(f"   Pitches    : {len(result.pitch_briefs)}")
     total_revisions = sum(result.revision_counts.values())
     print(f"   Revisions  : {total_revisions} (across {len(result.revision_counts)} pitches)")
-    print(f"\n💾 Output written to: {args.output}")
+    print(f"\nOutput written to: {args.output}")
 
 
 if __name__ == "__main__":

@@ -40,15 +40,19 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         for idea in state.ideas
     ]
     
-    # Also provide pain points for demand validation
-    pps = state.filtered_pain_points
+    # Sort pain points by evidence count (descending) to prioritize well-validated pain points
+    sorted_pps = sorted(
+        state.filtered_pain_points,
+        key=lambda pp: len(pp.evidence),
+        reverse=True
+    )
     pp_blobs = [
         {
             "id": str(pp.id),
             "title": pp.title,
             "description": pp.description,
         }
-        for pp in pps
+        for pp in sorted_pps
     ]
 
     user_text = (
@@ -62,9 +66,15 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
-    llm = get_llm(temperature=0.1, max_tokens=4096, reasoning=True)
+    # Use reasoning=False to disable thinking mode for structured JSON output
+    llm = get_llm(temperature=0.1, max_tokens=4096, reasoning=False)
+    
+    # Add explicit JSON-only instruction
+    system_prompt = _build_system_prompt()
+    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON array. No markdown code fences, no explanations, no preamble. Start with [ and end with ].**"
+    
     messages = [
-        SystemMessage(content=_build_system_prompt()),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=_build_user_prompt(state)),
     ]
 
@@ -77,10 +87,14 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
         return []
 
     logger.info(f"[scorer] LLM responded in {time.monotonic()-start:.1f}s")
+    
+    # Debug: log response preview
+    logger.info(f"[scorer] Response preview (first 500 chars): {content[:500]}")
 
     parsed = extract_json(content)
     if parsed is None:
-        logger.error("[scorer] JSON extraction failed")
+        logger.error(f"[scorer] JSON extraction failed. Response length: {len(content)} chars")
+        logger.error(f"[scorer] Full response (first 2000 chars): {content[:2000]}")
         return []
     if isinstance(parsed, dict) and "scored_ideas" in parsed:
         return parsed["scored_ideas"]
@@ -154,7 +168,7 @@ def run(state: VentureForgeState) -> dict:
 
     patch = {
         "scored_ideas": scored_ideas,
-        "current_stage": PipelineStage.SCORING,
+
         "next_node": "orchestrator",
     }
     patch.update(

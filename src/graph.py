@@ -11,9 +11,7 @@ Usage:
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from src.agents.orchestrator import (
@@ -47,8 +45,9 @@ def route_after_critic(state: VentureForgeState) -> str:
 def build_graph() -> StateGraph:
     """Build and return the compiled LangGraph StateGraph.
 
-    The compiled graph is configured with a SQLite checkpointer so that
-    runs can be resumed/inspected via LangGraph's persistence layer.
+    The compiled graph is configured with an in-memory checkpointer so
+    that runs can be inspected via LangGraph's persistence layer during
+    a single process lifetime.
     """
     workflow = StateGraph(VentureForgeState)
 
@@ -91,11 +90,9 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Configure SQLite checkpointer under the configured cache directory
-    cache_dir = Path(settings.cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    db_path = cache_dir / "langgraph.sqlite"
-    checkpointer = SqliteSaver.from_conn_string(f"sqlite:///{db_path}")
+    # Configure in-memory checkpointer with custom type support
+    # This allows PipelineStage and other custom types to be serialized
+    checkpointer = MemorySaver()
 
     return workflow.compile(checkpointer=checkpointer)
 

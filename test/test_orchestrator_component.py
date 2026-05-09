@@ -27,35 +27,22 @@ from src.state.schema import (
     ScoredIdea,
     VentureForgeState,
 )
+from test.test_helpers import make_test_pain_point
 
 logging.basicConfig(level=logging.INFO)
 
 
 def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, revision_count: int = 0) -> VentureForgeState:
-    pp1 = PainPoint(
-        id=uuid4(),
+    pp1 = make_test_pain_point(
         title="Docker Compose is hard",
         description="Developers struggle with complex multi-service local development setups.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/docker/comments/abc123",
         raw_quote="I spend more time debugging docker-compose.yml than writing code.",
         source=DataSource.REDDIT,
     )
-    pp2 = PainPoint(
-        id=uuid4(),
+    pp2 = make_test_pain_point(
         title="CI debugging is painful",
         description="Developers waste hours reproducing CI failures locally.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/devops/comments/def456",
         raw_quote="Why does my test pass locally but fail in CI?",
         source=DataSource.REDDIT,
@@ -118,20 +105,21 @@ def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, re
         all_claims_evidence_backed=True,
         no_hallucinated_source_urls=True,
         tagline_under_12_words=True,
-        target_is_contained_fire=all_pass,
+        target_is_contained_fire=all_pass,  # Fail this if all_pass=False
         competition_embraced_with_thesis=True,
-        unscalable_acquisition_concrete=True,
-        gtm_leads_with_manual_recruitment=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
     )
     critique = Critique(
         idea_id=idea.id,
-        reasoning_trace="ok" if all_pass else "needs revision",
+        reasoning_trace="ok" if all_pass else "Target user is too broad - not a contained fire.",
         rubric=rubric,
         all_pass=all_pass,
         approval_status="approved" if all_pass else "revise",
-        target_agent="pitch_writer",
+        target_agent="idea_generator",  # Positioning issues route to idea_generator
         revision_feedback=(
-            "Tighten target user and add concrete manual GTM steps."
+            "Target user 'Solo developers and small teams' is too broad. "
+            "Replace with a specific reachable community (e.g., 'React Native developers using Docker')."
             if not all_pass
             else "All good — approved as-is."
         ),
@@ -159,11 +147,9 @@ def test_routes_to_mining_when_no_pain_points() -> None:
 
 
 def test_routes_to_generator_when_no_ideas() -> None:
-    pp = PainPoint(
+    pp = make_test_pain_point(
         title="Some pain",
         description="A sufficiently long description for schema validation.",
-        rubric=PainPointRubric(is_genuine_current_frustration=True, has_verbatim_quote=True, user_segment_specific=True),
-        passes_rubric=True,
         source_url="https://reddit.com/r/x/comments/1",
         raw_quote="This is a real quote that is long enough.",
         source=DataSource.REDDIT,
@@ -181,9 +167,10 @@ def test_reflection_loop_bumps_revision_and_resets_downstream() -> None:
     patch = orchestrator(state)
 
     assert patch["current_stage"] == PipelineStage.REVISING
-    assert patch["next_node"] == "pitch_writer"
+    assert patch["next_node"] == "idea_generator"  # Positioning issues route to idea_generator
     assert patch["revision_counts"][idea_id] == 1
-    assert patch["pitch_briefs"] == []
+    # For idea_generator revisions, only the specific idea is cleared (Issue #1 fix)
+    assert len(patch["ideas"]) == 0 or all(str(i.id) != idea_id for i in patch.get("ideas", []))
     assert patch["critique"] is None
     assert patch["revision_feedback"]
     print("  PASS")

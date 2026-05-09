@@ -32,6 +32,8 @@ class DataSource(str, Enum):
 
     REDDIT = "reddit"
     HACKERNEWS = "hackernews"
+    PRODUCTHUNT = "producthunt"
+    WEB = "web"
 
 
 class Verdict(str, Enum):
@@ -80,7 +82,7 @@ class PainPointRubric(BaseModel):
     @computed_field
     @property
     def all_pass(self) -> bool:
-        return all(self.model_dump().values())
+        return all(self.model_dump(exclude={'all_pass'}).values())
 
 
 class FeasibilityRubric(BaseModel):
@@ -120,6 +122,9 @@ class CritiqueRubric(BaseModel):
     """Binary checks applied by the Critic to pitch briefs.
 
     PG pressure-test criteria with concrete, non-vague definitions.
+    Reduced from 7 to 5 checks - removed manual outreach requirements.
+    Added minimum_evidence_sources check to ensure multiple sources.
+    Added scorer_verdict_justified check to validate Scorer output.
     """
 
     all_claims_evidence_backed: bool
@@ -127,8 +132,8 @@ class CritiqueRubric(BaseModel):
     tagline_under_12_words: bool
     target_is_contained_fire: bool
     competition_embraced_with_thesis: bool
-    unscalable_acquisition_concrete: bool
-    gtm_leads_with_manual_recruitment: bool
+    minimum_evidence_sources: bool  # At least 2 distinct source URLs
+    scorer_verdict_justified: bool  # Scorer's "pursue" verdict aligns with pitch quality
 
 
 # =============================================================================
@@ -136,17 +141,46 @@ class CritiqueRubric(BaseModel):
 # =============================================================================
 
 
+class PainPointEvidence(BaseModel):
+    """A single piece of evidence supporting a pain point."""
+    
+    source_url: str = Field(..., min_length=5)
+    raw_quote: str = Field(..., min_length=5)
+    source: DataSource
+
+
 class PainPoint(BaseModel):
-    """A structured user pain point extracted from Reddit or Hacker News."""
+    """A structured user pain point with multiple evidence sources."""
 
     id: UUID = Field(default_factory=uuid4)
     title: str = Field(..., min_length=5, max_length=200)
     description: str = Field(..., min_length=10, max_length=500)
     rubric: PainPointRubric
     passes_rubric: bool
-    source_url: str = Field(..., min_length=5)
-    raw_quote: str = Field(..., min_length=5)
-    source: DataSource
+    
+    # Multiple evidence sources (1-10 per pain point)
+    evidence: list[PainPointEvidence] = Field(min_length=1, max_length=10)
+    
+    # Computed properties for backward compatibility
+    @property
+    def source_url(self) -> str:
+        """Primary source URL (first evidence item)."""
+        return self.evidence[0].source_url if self.evidence else ""
+    
+    @property
+    def raw_quote(self) -> str:
+        """Primary quote (first evidence item)."""
+        return self.evidence[0].raw_quote if self.evidence else ""
+    
+    @property
+    def source(self) -> DataSource:
+        """Primary source (first evidence item)."""
+        return self.evidence[0].source if self.evidence else DataSource.WEB
+    
+    @property
+    def evidence_count(self) -> int:
+        """Number of evidence sources."""
+        return len(self.evidence)
 
 
 class Idea(BaseModel):
@@ -235,13 +269,22 @@ class Critique(BaseModel):
     def _sync_from_rubric(self) -> "Critique":
         """Ensure all_pass/failing_checks/approval_status/target_agent match rubric.
 
-        Target-agent priority:
-        1. pain_point_miner — if any evidence check fails
-           (all_claims_evidence_backed or no_hallucinated_source_urls).
+        Target-agent priority (revised for better revision targeting):
+        1. pitch_writer — if no_hallucinated_source_urls fails (invented URLs)
+           OR if only writing/tone checks fail (tagline_under_12_words)
+           OR if minimum_evidence_sources fails (need to cite more sources).
         2. idea_generator — if positioning checks fail
            (target_is_contained_fire or competition_embraced_with_thesis)
+           OR if scorer_verdict_justified fails (idea quality doesn't match "pursue" verdict)
            and evidence checks pass.
-        3. pitch_writer — otherwise (writing/tone only).
+        3. pain_point_miner — ONLY if all_claims_evidence_backed fails AND
+           no_hallucinated_source_urls passes (evidence is genuinely weak,
+           not just misreferenced).
+        
+        Rationale: Hallucinated URLs are a pitch_writer problem (making up sources).
+        Weak evidence is a pain_point_miner problem (need better sources).
+        Insufficient evidence count is a pitch_writer problem (cite more existing sources).
+        Unjustified scorer verdict is an idea_generator problem (idea needs rethinking).
         """
         rubric_dict = self.rubric.model_dump()
         self.failing_checks = [k for k, v in rubric_dict.items() if not v]
@@ -253,13 +296,28 @@ class Critique(BaseModel):
         # Enforce target_agent priority only when revision is required
         if not self.all_pass:
             r = self.rubric
-            evidence_failed = (not r.all_claims_evidence_backed) or (not r.no_hallucinated_source_urls)
+            
+            # Check which categories failed
+            hallucinated_urls = not r.no_hallucinated_source_urls
+            weak_claims = not r.all_claims_evidence_backed
+            insufficient_sources = not r.minimum_evidence_sources
+            scorer_issue = not r.scorer_verdict_justified
             positioning_failed = (not r.target_is_contained_fire) or (not r.competition_embraced_with_thesis)
-
-            if evidence_failed:
-                self.target_agent = "pain_point_miner"
-            elif positioning_failed:
+            writing_failed = not r.tagline_under_12_words
+            
+            # Priority 1: Hallucinated URLs → pitch_writer (fix the URLs)
+            if hallucinated_urls:
+                self.target_agent = "pitch_writer"
+            # Priority 2: Positioning or scorer issues → idea_generator
+            elif positioning_failed or scorer_issue:
                 self.target_agent = "idea_generator"
+            # Priority 3: Insufficient evidence sources → pitch_writer (cite more)
+            elif insufficient_sources:
+                self.target_agent = "pitch_writer"
+            # Priority 4: Weak claims but URLs are real → pitch_writer (tone down claims)
+            elif weak_claims and not hallucinated_urls:
+                self.target_agent = "pitch_writer"
+            # Priority 5: Writing/tone only → pitch_writer
             else:
                 self.target_agent = "pitch_writer"
 
@@ -308,7 +366,7 @@ class VentureForgeState(BaseModel):
     max_pain_points: int = Field(default=30, ge=5, le=100)
     ideas_per_run: int = Field(default=5, ge=1, le=20)
     top_n_pitches: int = Field(default=3, ge=1, le=10)
-    max_revisions: int = Field(default=2, ge=0, le=5)
+    max_revisions: int = Field(default=3, ge=0, le=5)
 
     # -----------------------------------------------------------------
     # Pipeline data (populated by worker agents)
@@ -325,6 +383,25 @@ class VentureForgeState(BaseModel):
     critiques: list[Critique] = Field(default_factory=list)
     revision_counts: dict[str, int] = Field(default_factory=dict)
     revision_feedback: str | None = None
+    current_revision_idea_id: UUID | None = None  # Track which idea is being revised
+    pain_point_miner_revision_count: int = Field(default=0, ge=0)  # Track pain_point_miner revisions separately
+    
+    # -----------------------------------------------------------------
+    # Retry tracking (prevent infinite loops when validation fails)
+    # -----------------------------------------------------------------
+    idea_generation_attempts: int = Field(default=0, ge=0)
+    """Total LLM invocations by idea_generator (validation retries + revisions)."""
+    
+    max_idea_generation_attempts: int = Field(default=10, ge=1)
+    """Max validation retries per idea_generator run (when LLM produces invalid ideas)."""
+    
+    max_total_llm_calls_per_agent: int = Field(default=15, ge=1)
+    """Global cap on total LLM calls per agent (validation + revisions combined).
+    
+    Prevents compounding retry mechanisms from causing excessive LLM usage.
+    Example: max_idea_generation_attempts=10 + max_revisions=3 could theoretically
+    cause 10 + 10 + 10 = 30 calls. This cap limits the total across all retries.
+    """
 
     # -----------------------------------------------------------------
     # Orchestration control (set by orchestrator node)
@@ -372,10 +449,18 @@ class VentureForgeState(BaseModel):
     @computed_field
     @property
     def can_revise(self) -> bool:
-        """True if the most recently critiqued pitch can still be revised."""
+        """True if the most recently critiqued pitch can still be revised.
+        
+        For pain_point_miner revisions, check the global pain_point_miner_revision_count.
+        For other agents, check the per-idea revision_counts.
+        """
         if self.critique is None:
             return True
-        return self.get_revision_count(self.critique.idea_id) < self.max_revisions
+        
+        if self.critique.target_agent == "pain_point_miner":
+            return self.pain_point_miner_revision_count < self.max_revisions
+        else:
+            return self.get_revision_count(self.critique.idea_id) < self.max_revisions
 
     @computed_field
     @property
@@ -433,9 +518,55 @@ class VentureForgeState(BaseModel):
 
         Agents and the orchestrator should call this to record high-level
         progress suitable for a UI log.
+        
+        NOTE: Use merge_patches() to combine multiple patches that include events,
+        otherwise the last patch will overwrite previous events.
         """
         ev = RunEvent(agent=agent, stage=stage, kind=kind, message=message, idea_id=idea_id)
         return {"events": self.events + [ev]}
+    
+    @staticmethod
+    def merge_patches(*patches: dict[str, Any]) -> dict[str, Any]:
+        """Merge multiple state patches, properly handling list fields.
+        
+        For list fields (events, error_log, critiques), concatenates instead of overwriting.
+        For dict fields (revision_counts, agent_timings), merges keys.
+        For scalar fields, last patch wins.
+        
+        Example:
+            patch1 = {"ideas": [...], "events": [ev1]}
+            patch2 = state.add_event(...)  # {"events": [ev2]}
+            merged = VentureForgeState.merge_patches(patch1, patch2)
+            # Result: {"ideas": [...], "events": [ev1, ev2]}
+        """
+        result: dict[str, Any] = {}
+        
+        # List fields that should be concatenated
+        list_fields = {"events", "error_log", "critiques", "pain_points", "ideas", "scored_ideas", "pitch_briefs"}
+        # Dict fields that should be merged
+        dict_fields = {"revision_counts", "agent_timings"}
+        
+        for patch in patches:
+            for key, value in patch.items():
+                if key in list_fields and isinstance(value, list):
+                    # Concatenate lists
+                    existing = result.get(key, [])
+                    if isinstance(existing, list):
+                        result[key] = existing + value
+                    else:
+                        result[key] = value
+                elif key in dict_fields and isinstance(value, dict):
+                    # Merge dicts
+                    existing = result.get(key, {})
+                    if isinstance(existing, dict):
+                        result[key] = {**existing, **value}
+                    else:
+                        result[key] = value
+                else:
+                    # Scalar fields: last patch wins
+                    result[key] = value
+        
+        return result
 
     def record_timing(self, agent_id: str, elapsed_s: float) -> dict[str, Any]:
         """Return a state patch recording agent timing."""
@@ -444,14 +575,14 @@ class VentureForgeState(BaseModel):
 
     def bump_revision(self, critique: Critique) -> dict[str, Any]:
         """
-        Return a state patch that increments the per-pitch revision counter,
+        Return a state patch that increments the appropriate revision counter,
         archives the critique, stores the critique, and prepares state for
         the target agent.
+        
+        For pain_point_miner revisions, increment the global pain_point_miner_revision_count
+        instead of the per-idea revision_counts (since all ideas will be regenerated).
         """
-        idea_id = str(critique.idea_id)
-        updated_counts = {**self.revision_counts, idea_id: self.revision_counts.get(idea_id, 0) + 1}
-        return {
-            "revision_counts": updated_counts,
+        patch = {
             "critiques": self.critiques + [critique],
             "critique": critique,
             "revision_feedback": critique.revision_feedback,
@@ -459,6 +590,17 @@ class VentureForgeState(BaseModel):
             "current_stage": PipelineStage.REVISING,
             "next_node": critique.target_agent,
         }
+        
+        if critique.target_agent == "pain_point_miner":
+            # Pain point miner revisions affect all ideas, so track globally
+            patch["pain_point_miner_revision_count"] = self.pain_point_miner_revision_count + 1
+        else:
+            # Per-idea revisions for idea_generator and pitch_writer
+            idea_id = str(critique.idea_id)
+            updated_counts = {**self.revision_counts, idea_id: self.revision_counts.get(idea_id, 0) + 1}
+            patch["revision_counts"] = updated_counts
+        
+        return patch
 
     def mark_completed(self) -> dict[str, Any]:
         """Return a state patch marking the pipeline as complete."""
@@ -495,34 +637,53 @@ class VentureForgeState(BaseModel):
         )
         return patch
 
-    def reset_for_revision(self, target_agent: TargetAgent | str) -> dict[str, Any]:
+    def reset_for_revision(self, target_agent: TargetAgent | str, idea_id: UUID) -> dict[str, Any]:
         """
-        Clear downstream data so the target worker can re-run cleanly.
-        E.g. if idea_generator is revised, we clear ideas, scored_ideas,
-        pitch_briefs, and critique.
+        Clear only the data for the specific idea being revised.
+        
+        For pitch_writer revisions: only remove the pitch brief for this idea.
+        For idea_generator revisions: remove the idea, its score, and its pitch brief.
+        For pain_point_miner revisions: this is more complex - we need to regenerate
+        pain points, which affects all ideas. In this case, we still do a full reset
+        but track the idea_id for context. We also clear revision_counts since all
+        ideas will be regenerated with new UUIDs.
         """
         target = target_agent if isinstance(target_agent, str) else target_agent.value
-        updates: dict[str, Any] = {}
+        updates: dict[str, Any] = {
+            "current_stage": PipelineStage.REVISING,
+            "current_revision_idea_id": idea_id,
+        }
+        
         if target == "pain_point_miner":
-            updates = {
+            # Pain point revisions require full regeneration since pain points
+            # are shared across all ideas. We keep the idea_id for context.
+            # Clear revision_counts since all ideas will get new UUIDs.
+            updates.update({
                 "pain_points": [],
                 "ideas": [],
                 "scored_ideas": [],
                 "pitch_briefs": [],
                 "critique": None,
-            }
+                "revision_counts": {},  # Clear since ideas will have new UUIDs
+            })
         elif target == "idea_generator":
-            updates = {
-                "ideas": [],
-                "scored_ideas": [],
-                "pitch_briefs": [],
+            # Remove only the specific idea and its downstream artifacts
+            filtered_ideas = [i for i in self.ideas if i.id != idea_id]
+            filtered_scored = [s for s in self.scored_ideas if s.idea_id != idea_id]
+            filtered_briefs = [b for b in self.pitch_briefs if b.idea_id != idea_id]
+            updates.update({
+                "ideas": filtered_ideas,
+                "scored_ideas": filtered_scored,
+                "pitch_briefs": filtered_briefs,
                 "critique": None,
-            }
+            })
         elif target == "pitch_writer":
-            updates = {
-                "pitch_briefs": [],
+            # Remove only the specific pitch brief
+            filtered_briefs = [b for b in self.pitch_briefs if b.idea_id != idea_id]
+            updates.update({
+                "pitch_briefs": filtered_briefs,
                 "critique": None,
-            }
+            })
         return updates
 
 
@@ -625,8 +786,6 @@ if __name__ == "__main__":
             tagline_under_12_words=True,
             target_is_contained_fire=False,
             competition_embraced_with_thesis=True,
-            unscalable_acquisition_concrete=True,
-            gtm_leads_with_manual_recruitment=True,
         ),
         all_pass=False,
         approval_status="revise",

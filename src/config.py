@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     tavily_api_key: str | None = Field(default=None)
 
     # ------------------------------------------------------------------
+    # Product Hunt — for scraping product comments and feedback
+    # Get key at: https://api.producthunt.com/v1/oauth/authorize
+    # ------------------------------------------------------------------
+    product_hunt_api_key: str | None = Field(default=None)
+
+    # ------------------------------------------------------------------
     # HuggingFace (for AMD vLLM model download)
     # ------------------------------------------------------------------
     hf_token: str | None = Field(default=None)
@@ -124,6 +130,10 @@ class Settings(BaseSettings):
     @property
     def tavily_enabled(self) -> bool:
         return bool(self.tavily_api_key)
+
+    @property
+    def product_hunt_enabled(self) -> bool:
+        return bool(self.product_hunt_api_key)
 
     @property
     def effective_llm_config(self) -> dict:

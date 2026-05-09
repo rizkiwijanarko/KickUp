@@ -27,36 +27,23 @@ from src.state.schema import (
     VentureForgeState,
     Verdict,
 )
+from test.test_helpers import make_test_pain_point
 
 logging.basicConfig(level=logging.INFO)
 
 
 def _make_minimal_state() -> VentureForgeState:
     """Build a valid VentureForgeState with two ideas ready to score."""
-    pp1 = PainPoint(
-        id=uuid4(),
+    pp1 = make_test_pain_point(
         title="Docker Compose is hard",
         description="Developers struggle with complex multi-service local development setups.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/docker/comments/abc123",
         raw_quote="I spend more time debugging docker-compose.yml than writing code.",
         source=DataSource.REDDIT,
     )
-    pp2 = PainPoint(
-        id=uuid4(),
+    pp2 = make_test_pain_point(
         title="CI debugging is painful",
         description="Developers waste hours reproducing CI failures locally.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/devops/comments/def456",
         raw_quote="Why does my test pass locally but fail in CI?",
         source=DataSource.REDDIT,

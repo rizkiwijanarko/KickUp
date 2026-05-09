@@ -1,12 +1,13 @@
-"""Reddit JSON scraper — no API key, no PRAW.
+"""Reddit scraper — uses PRAW with OAuth authentication.
 
-Uses Reddit's public `.json` endpoints with search-first strategy:
+Uses Reddit's official API via PRAW library:
   1. Search a subreddit for posts matching complaint keywords (`self:yes` + `t=month`)
   2. Filter posts by complaint keywords in title
   3. Fetch top-level comments from the matching posts
   4. Return structured comment data with verbatim text + direct URLs
 
-Rate-limiting: 0.5 s sleep between every HTTP request to Reddit.
+Requires: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET in environment
+Get credentials at: https://www.reddit.com/prefs/apps
 """
 from __future__ import annotations
 
@@ -17,11 +18,16 @@ from dataclasses import dataclass
 from typing import Iterator
 
 import diskcache
+import praw
 import requests
+import urllib3
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Suppress SSL warnings for Reddit (known certificate issues)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Disk-backed cache for Reddit JSON responses
 _CACHE = diskcache.Cache(settings.cache_dir)
@@ -121,15 +127,43 @@ class ScrapedComment:
 
 
 # ------------------------------------------------------------------
-# Low-level HTTP helpers
+# PRAW Reddit client
+# ------------------------------------------------------------------
+def _get_reddit_client() -> praw.Reddit | None:
+    """Get a PRAW Reddit client with OAuth authentication."""
+    if not settings.reddit_client_id or not settings.reddit_client_secret:
+        logger.warning("[reddit] REDDIT_CLIENT_ID or REDDIT_CLIENT_SECRET not set")
+        return None
+
+    try:
+        # Create a custom requests session with SSL verification disabled
+        session = requests.Session()
+        session.verify = False
+
+        reddit = praw.Reddit(
+            client_id=settings.reddit_client_id,
+            client_secret=settings.reddit_client_secret,
+            user_agent=settings.reddit_user_agent,
+            read_only=True,
+            request_timeout=15,
+            session=session,
+        )
+
+        # Test the connection
+        reddit.user.me()
+        return reddit
+    except Exception as e:
+        logger.warning(f"[reddit] Failed to initialize PRAW client: {e}")
+        return None
+
+
+# ------------------------------------------------------------------
+# Low-level HTTP helpers (fallback for non-PRAW operations)
 # ------------------------------------------------------------------
 def _make_request(url: str, retries: int = 2) -> dict | list | None:
     """GET a Reddit JSON endpoint with automatic delay + retry, cached via diskcache.
 
-    We key purely on the URL since all requests are GETs to Reddit's
-    `.json` endpoints. Successful JSON responses are cached for
-    ``settings.cache_ttl_hours`` (default 24h) to avoid repeatedly
-    hitting Reddit during development.
+    This is kept as a fallback for operations not supported by PRAW.
     """
     cache_key = ("reddit_json", url)
     cached = _CACHE.get(cache_key, default=_MISSING)
@@ -140,10 +174,11 @@ def _make_request(url: str, retries: int = 2) -> dict | list | None:
         try:
             time.sleep(_REQUEST_DELAY_S)
             headers = {
-                "User-Agent": "ventureforge/0.1.0 (academic research)",
+                "User-Agent": settings.reddit_user_agent,
                 "Accept": "application/json",
             }
-            r = requests.get(url, headers=headers, timeout=15)
+            # Reddit has known SSL certificate issues, so we disable verification
+            r = requests.get(url, headers=headers, timeout=15, verify=False)
             if r.status_code == 404:
                 # Cache 404s as None to avoid repeated misses
                 _CACHE.set(cache_key, None, expire=_TTL_S)
@@ -197,6 +232,39 @@ def _extract_top_level_comments(comments_listing: dict, post_title: str, subredd
 # ------------------------------------------------------------------
 def search_posts(subreddit: str, query: str) -> list[dict]:
     """Run a single search query on a subreddit; return raw post children."""
+    reddit = _get_reddit_client()
+    if reddit:
+        try:
+            # Use PRAW for search
+            subreddit_obj = reddit.subreddit(subreddit)
+            results = subreddit_obj.search(
+                query,
+                sort="new",
+                time_filter=_TIME_WINDOW,
+                limit=_SEARCH_LIMIT,
+            )
+            # Convert PRAW Submission objects to dict format
+            posts = []
+            for submission in results:
+                posts.append(
+                    {
+                        "data": {
+                            "title": submission.title,
+                            "selftext": submission.selftext,
+                            "permalink": submission.permalink,
+                            "id": submission.id,
+                            "url": submission.url,
+                            "num_comments": submission.num_comments,
+                        }
+                    }
+                )
+            return posts
+        except Exception as e:
+            logger.warning(f"[reddit] PRAW search failed for r/{subreddit}: {e}")
+            # Fall back to JSON API
+            pass
+
+    # Fallback to JSON API
     q = requests.utils.quote(query)
     url = (
         f"https://www.reddit.com/r/{subreddit}/search.json"
@@ -213,6 +281,40 @@ def fetch_post_comments(subreddit: str, post_id: str) -> tuple[str, list[Scraped
 
     Returns ``(post_title, comments)`` or ``None`` on failure.
     """
+    reddit = _get_reddit_client()
+    if reddit:
+        try:
+            # Use PRAW to fetch submission
+            submission = reddit.submission(id=post_id)
+            submission.comments.replace_more(limit=0)  # Remove "load more comments"
+
+            post_title = submission.title
+            comments = []
+
+            for comment in submission.comments:
+                if not hasattr(comment, "body"):
+                    continue
+                body = comment.body.strip()
+                if not body or len(body) < 30:
+                    continue
+                if comment.author and comment.author.name.lower() in {"automoderator", "[deleted]", "deleted"}:
+                    continue
+
+                url = f"https://www.reddit.com{comment.permalink}"
+                comments.append(
+                    ScrapedComment(text=body, url=url, subreddit=subreddit, post_title=post_title)
+                )
+
+                if len(comments) >= _MAX_COMMENTS_PER_POST:
+                    break
+
+            return post_title, comments
+        except Exception as e:
+            logger.warning(f"[reddit] PRAW comment fetch failed for {post_id}: {e}")
+            # Fall back to JSON API
+            pass
+
+    # Fallback to JSON API
     url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json"
     resp = _make_request(url)
     if not resp or not isinstance(resp, list) or len(resp) < 2:

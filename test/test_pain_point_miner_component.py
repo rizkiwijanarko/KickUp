@@ -53,7 +53,7 @@ def _make_pp_item(*, quote: str, url: str) -> dict[str, Any]:
 
 def test_no_comments_returns_empty() -> None:
     state = VentureForgeState(domain="developer tools", max_pain_points=5)
-    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=[]):
+    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=([], DataSource.HACKERNEWS)):
         result = run_pain_point_miner(state)
     assert result["pain_points"] == []
     assert result["current_stage"] == PipelineStage.MINING
@@ -71,7 +71,7 @@ def test_wellformed_response_validates_quotes_and_overwrites_url() -> None:
         url="https://reddit.com/wrong/url",
     )
 
-    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=comments), patch(
+    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=(comments, DataSource.HACKERNEWS)), patch(
         "src.agents.pain_point_miner.get_llm"
     ) as mock_get_llm:
         fake_llm = MagicMock()
@@ -97,7 +97,7 @@ def test_quote_not_found_is_rejected() -> None:
 
     item = _make_pp_item(quote="This quote does not exist in any comment.", url="https://reddit.com/x")
 
-    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=comments), patch(
+    with patch("src.agents.pain_point_miner._tavily_enriched_scrape", return_value=(comments, DataSource.HACKERNEWS)), patch(
         "src.agents.pain_point_miner.get_llm"
     ) as mock_get_llm:
         fake_llm = MagicMock()
@@ -114,11 +114,14 @@ def test_quote_not_found_is_rejected() -> None:
 
 
 def test_live_llm_produces_valid_pain_points() -> None:
-    """Uses real API call + real Reddit scraping. Requires OPENAI_API_KEY."""
+    """Uses real API call + real scraping. Requires any LLM API key."""
     import os
 
-    if not os.getenv("OPENAI_API_KEY"):
-        print("  SKIP (no OPENAI_API_KEY)")
+    from src.config import settings
+
+    # Check for any configured LLM API key
+    if not (settings.llm_api_key or settings.fast_llm_api_key or os.getenv("OPENAI_API_KEY")):
+        print("  SKIP (no LLM_API_KEY, FAST_LLM_API_KEY, or OPENAI_API_KEY)")
         return
 
     state = VentureForgeState(domain="developer tools", max_pain_points=5)

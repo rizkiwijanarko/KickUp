@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -60,9 +61,15 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 
 def _invoke_llm(state: VentureForgeState) -> dict:
-    llm = get_llm(temperature=0.2, max_tokens=2048, reasoning=True)
+    # Use reasoning=False to disable thinking mode for structured JSON output
+    llm = get_llm(temperature=0.2, max_tokens=2048, reasoning=False)
+    
+    # Add explicit JSON-only instruction
+    system_prompt = _build_system_prompt()
+    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON object. No markdown code fences, no explanations, no preamble. Start with { and end with }.**"
+    
     messages = [
-        SystemMessage(content=_build_system_prompt()),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=_build_user_prompt(state)),
     ]
 
@@ -75,10 +82,14 @@ def _invoke_llm(state: VentureForgeState) -> dict:
         return {}
 
     logger.info(f"[critic] LLM responded in {time.monotonic()-start:.1f}s")
+    
+    # Debug: log response preview
+    logger.info(f"[critic] Response preview (first 500 chars): {content[:500]}")
 
     parsed = extract_json(content)
     if parsed is None:
-        logger.error("[critic] JSON extraction failed")
+        logger.error(f"[critic] JSON extraction failed. Response length: {len(content)} chars")
+        logger.error(f"[critic] Full response (first 2000 chars): {content[:2000]}")
         return {}
     return parsed
 
@@ -100,9 +111,7 @@ def run(state: VentureForgeState) -> dict:
         )
         return patch
 
-    # Auto-approve if max revisions reached for this pitch. We apply the
-    # same brief-selection logic as in _build_user_prompt: prefer the
-    # pitch for the highest-scoring idea when available.
+    # Select the brief to critique (prefer highest-scoring idea)
     brief = state.pitch_briefs[0]
     if state.scored_ideas:
         top_ids = [s.idea_id for s in state.top_scored_ideas]
@@ -112,43 +121,8 @@ def run(state: VentureForgeState) -> dict:
                 brief = match
                 break
 
-    if state.get_revision_count(brief.idea_id) >= state.max_revisions:
-        rubric = CritiqueRubric(
-            all_claims_evidence_backed=True,
-            no_hallucinated_source_urls=True,
-            tagline_under_12_words=True,
-            target_is_contained_fire=True,
-            competition_embraced_with_thesis=True,
-            unscalable_acquisition_concrete=True,
-            gtm_leads_with_manual_recruitment=True,
-        )
-        critique = Critique(
-            idea_id=brief.idea_id,
-            reasoning_trace="Max revisions reached — approved by default.",
-            rubric=rubric,
-            all_pass=True,
-            approval_status="approved",
-            target_agent="pitch_writer",
-            revision_feedback="Max revisions reached — approved by default.",
-        )
-        patch = {
-            "critique": critique,
-            "current_stage": PipelineStage.CRITIQUING,
-            "next_node": "orchestrator",
-        }
-        patch.update(
-            state.add_event(
-                agent="critic",
-                stage=PipelineStage.CRITIQUING,
-                kind="info",
-                message=(
-                    f"Auto-approved pitch for idea {brief.idea_id} after "
-                    f"reaching max revisions ({state.max_revisions})."
-                ),
-                idea_id=brief.idea_id,
-            )
-        )
-        return patch
+    # Check if we're at max revisions (but still run the LLM to evaluate the final revision)
+    at_max_revisions = state.get_revision_count(brief.idea_id) >= state.max_revisions
 
     raw = _invoke_llm(state)
     if not raw:
@@ -169,22 +143,86 @@ def run(state: VentureForgeState) -> dict:
 
     try:
         # Unwrap if LLM returned {"critique": {...}}
-        if "critique" in raw and isinstance(raw["critique"], dict):
+        if "critique" in raw:
             raw = raw["critique"]
 
-        rubric = CritiqueRubric(**coerce_rubric_bools(raw["rubric"]))
-        critique = Critique(
-            idea_id=brief.idea_id,
-            reasoning_trace=raw.get("reasoning_trace", ""),
-            rubric=rubric,
-            all_pass=raw["all_pass"],
-            approval_status=raw["approval_status"],
-            failing_checks=raw.get("failing_checks", []),
-            target_agent=raw["target_agent"],
-            revision_feedback="\n".join(raw["revision_feedback"]) if isinstance(raw["revision_feedback"], list) else raw["revision_feedback"],
+        # Coerce rubric booleans
+        if "rubric" in raw and isinstance(raw["rubric"], dict):
+            raw["rubric"] = coerce_rubric_bools(raw["rubric"])
+        
+        # Handle list revision_feedback (coerce to string)
+        if "revision_feedback" in raw and isinstance(raw["revision_feedback"], list):
+            raw["revision_feedback"] = "\n".join(raw["revision_feedback"])
+
+        # Add idea_id (required by Critique model but not in LLM output)
+        raw["idea_id"] = brief.idea_id
+        
+        critique = Critique(**raw)
+        
+        # If we're at max revisions AND the critique still fails, auto-approve
+        if at_max_revisions and not critique.all_pass:
+            logger.info(
+                f"[critic] Max revisions reached for idea {brief.idea_id}. "
+                f"LLM critique failed but auto-approving anyway."
+            )
+            # Override the critique to approve
+            critique = Critique(
+                idea_id=brief.idea_id,
+                reasoning_trace=(
+                    f"Max revisions reached. Original critique: {critique.reasoning_trace}"
+                ),
+                rubric=CritiqueRubric(
+                    all_claims_evidence_backed=True,
+                    no_hallucinated_source_urls=True,
+                    tagline_under_12_words=True,
+                    target_is_contained_fire=True,
+                    competition_embraced_with_thesis=True,
+                ),
+                all_pass=True,
+                approval_status="approved",
+                target_agent="pitch_writer",
+                revision_feedback=(
+                    f"Max revisions reached — approved by default. "
+                    f"Original feedback: {critique.revision_feedback}"
+                ),
+            )
+
+        patch = {
+            "critique": critique,
+            "current_stage": PipelineStage.CRITIQUING,
+            "next_node": "orchestrator",
+        }
+        
+        if at_max_revisions and not critique.all_pass:
+            # This branch is now unreachable (we override above), but kept for clarity
+            message = (
+                f"Auto-approved pitch for idea {brief.idea_id} after "
+                f"reaching max revisions ({state.max_revisions}), despite LLM critique failing."
+            )
+        elif critique.all_pass:
+            message = f"Approved pitch for idea {brief.idea_id}."
+        else:
+            message = (
+                f"Critique for idea {brief.idea_id}: {len(critique.failing_checks)} "
+                f"checks failed. Routing to {critique.target_agent} for revision."
+            )
+        
+        patch.update(
+            state.add_event(
+                agent="critic",
+                stage=PipelineStage.CRITIQUING,
+                kind="info",
+                message=message,
+                idea_id=brief.idea_id,
+            )
         )
+        return patch
+
     except Exception as e:
-        logger.error(f"[critic] malformed critique: {e}")
+        logger.error(f"[critic] Failed to parse critique: {e}")
+        # Convert UUID to string for JSON serialization
+        raw_for_log = {k: str(v) if isinstance(v, UUID) else v for k, v in raw.items()}
+        logger.error(f"[critic] Raw LLM output: {json.dumps(raw_for_log, indent=2)}")
         patch = {
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "orchestrator",
@@ -194,28 +232,7 @@ def run(state: VentureForgeState) -> dict:
                 agent="critic",
                 stage=PipelineStage.CRITIQUING,
                 kind="error",
-                message="Critic produced a malformed critique; keeping previous state.",
+                message=f"Failed to parse critique: {e}",
             )
         )
         return patch
-
-    # Normal successful critique
-    message = (
-        "Approved pitch" if critique.all_pass else
-        f"Requested revision for idea {critique.idea_id} → target_agent={critique.target_agent}"
-    )
-    patch = {
-        "critique": critique,
-        "current_stage": PipelineStage.CRITIQUING,
-        "next_node": "orchestrator",
-    }
-    patch.update(
-        state.add_event(
-            agent="critic",
-            stage=PipelineStage.CRITIQUING,
-            kind="info",
-            message=message,
-            idea_id=critique.idea_id,
-        )
-    )
-    return patch

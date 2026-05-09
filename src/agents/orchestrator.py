@@ -33,14 +33,54 @@ def orchestrator(state: VentureForgeState) -> dict:
         )
         return patch
 
+    # --- Idea generation: retry if validation failed ---
     if not state.ideas:
-        patch = {"current_stage": PipelineStage.GENERATING, "next_node": "idea_generator"}
+        # Check global cap first (prevents compounding validation + revision retries)
+        if state.idea_generation_attempts >= state.max_total_llm_calls_per_agent:
+            error_msg = (
+                f"Reached global LLM call limit ({state.max_total_llm_calls_per_agent}) for idea_generator. "
+                f"This prevents excessive retries from validation failures + Critic revisions. "
+                f"Check logs for root cause (invalid pain_point_ids, schema mismatches, etc.)."
+            )
+            patch = state.mark_failed(error_msg)
+            patch.update(
+                state.add_event(
+                    agent="orchestrator",
+                    stage=PipelineStage.FAILED,
+                    kind="error",
+                    message=error_msg,
+                )
+            )
+            return patch
+        
+        # Check per-run validation retry limit
+        if state.idea_generation_attempts >= state.max_idea_generation_attempts:
+            error_msg = (
+                f"Failed to generate valid ideas after {state.idea_generation_attempts} attempts. "
+                "This usually means the LLM is not producing ideas with valid pain_point_ids. "
+                "Check logs for validation failures."
+            )
+            patch = state.mark_failed(error_msg)
+            patch.update(
+                state.add_event(
+                    agent="orchestrator",
+                    stage=PipelineStage.FAILED,
+                    kind="error",
+                    message=error_msg,
+                )
+            )
+            return patch
+        
+        patch = {
+            "current_stage": PipelineStage.GENERATING,
+            "next_node": "idea_generator",
+        }
         patch.update(
             state.add_event(
                 agent="orchestrator",
                 stage=PipelineStage.GENERATING,
                 kind="info",
-                message="Routing to idea_generator (no ideas yet).",
+                message=f"Routing to idea_generator (no ideas yet, attempt {state.idea_generation_attempts + 1}/{state.max_idea_generation_attempts}, global {state.idea_generation_attempts + 1}/{state.max_total_llm_calls_per_agent}).",
             )
         )
         return patch
@@ -69,6 +109,7 @@ def orchestrator(state: VentureForgeState) -> dict:
         )
         return patch
 
+    # We have pitch_briefs. Now check if we need to critique them.
     if state.critique is None:
         patch = {"current_stage": PipelineStage.CRITIQUING, "next_node": "critic"}
         patch.update(
@@ -86,7 +127,7 @@ def orchestrator(state: VentureForgeState) -> dict:
         # Loop back to target worker for revision
         target = state.critique.target_agent
         patch = state.bump_revision(state.critique)
-        patch.update(state.reset_for_revision(target))
+        patch.update(state.reset_for_revision(target, state.critique.idea_id))
         patch.update(
             state.add_event(
                 agent="orchestrator",

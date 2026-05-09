@@ -23,7 +23,21 @@ def _build_system_prompt() -> str:
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
-    top_ideas = state.top_scored_ideas
+    # If we're in revision mode for a specific idea, only write that pitch
+    if state.current_revision_idea_id:
+        # Find the specific scored idea being revised
+        target_scored = next(
+            (s for s in state.scored_ideas if s.idea_id == state.current_revision_idea_id),
+            None
+        )
+        if not target_scored:
+            # Fallback to top ideas if we can't find the specific one
+            top_ideas = state.top_scored_ideas
+        else:
+            top_ideas = [target_scored]
+    else:
+        top_ideas = state.top_scored_ideas
+    
     ideas_map = {str(idea.id): idea for idea in state.ideas}
 
     scored_blobs = []
@@ -45,15 +59,28 @@ def _build_user_prompt(state: VentureForgeState) -> str:
             "one_risk": s.one_risk,
         })
 
-    pps = state.filtered_pain_points
+    # Sort pain points by evidence count (descending) to prioritize well-validated pain points
+    sorted_pps = sorted(
+        state.filtered_pain_points,
+        key=lambda pp: len(pp.evidence),
+        reverse=True
+    )
     pp_blobs = [
         {
             "id": str(pp.id),
             "title": pp.title,
             "description": pp.description,
-            "source_url": pp.source_url,
+            "evidence": [
+                {
+                    "source_url": ev.source_url,
+                    "raw_quote": ev.raw_quote,
+                    "source": ev.source.value,
+                }
+                for ev in pp.evidence
+            ],
+            "evidence_count": len(pp.evidence),
         }
-        for pp in pps
+        for pp in sorted_pps
     ]
 
     feedback = state.revision_feedback or "None"
@@ -93,9 +120,16 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
-    llm = get_llm(temperature=0.4, max_tokens=4096, reasoning=False)
+    # Pitch briefs are long (~6K tokens per brief x 3 briefs = ~18K tokens)
+    # Set max_tokens to 8192 to avoid truncation
+    llm = get_llm(temperature=0.4, max_tokens=8192, reasoning=False)
+    
+    # Add explicit JSON-only instruction
+    system_prompt = _build_system_prompt()
+    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON array. No markdown code fences, no explanations, no preamble. Start with [ and end with ].**"
+    
     messages = [
-        SystemMessage(content=_build_system_prompt()),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=_build_user_prompt(state)),
     ]
 
@@ -108,15 +142,47 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
         return []
 
     logger.info(f"[pitch_writer] LLM responded in {time.monotonic()-start:.1f}s")
+    
+    # Debug: log response preview and check for truncation
+    logger.info(f"[pitch_writer] Response preview (first 500 chars): {content[:500]}")
+    logger.info(f"[pitch_writer] Response length: {len(content)} chars")
+    
+    # Warn if response looks truncated (doesn't end with ] or })
+    if content and not content.rstrip().endswith((']', '}')):
+        logger.warning(
+            f"[pitch_writer] Response may be truncated (doesn't end with ] or }}). "
+            f"Last 100 chars: {content[-100:]}"
+        )
 
     parsed = extract_json(content)
     if parsed is None:
-        logger.error(f"[pitch_writer] JSON extraction failed (content len={len(content)}, first 80={content[:80]!r})")
+        logger.error(f"[pitch_writer] JSON extraction failed. Response length: {len(content)} chars")
+        logger.error(f"[pitch_writer] Full response (first 2000 chars): {content[:2000]}")
         return []
 
     if isinstance(parsed, dict) and "pitch_briefs" in parsed:
         return parsed["pitch_briefs"]
     return parsed if isinstance(parsed, list) else []
+
+
+def _collect_evidence_urls(idea_id: str, state: VentureForgeState) -> list[str]:
+    """
+    Collect all evidence URLs from pain points referenced by this idea.
+    Fallback for when LLM fails to provide evidence_links.
+    """
+    urls = []
+    idea = next((i for i in state.ideas if str(i.id) == str(idea_id)), None)
+    if not idea:
+        return urls
+    
+    for pp_id in idea.addresses_pain_point_ids:
+        pp = next((p for p in state.pain_points if str(p.id) == str(pp_id)), None)
+        if pp and hasattr(pp, 'evidence') and pp.evidence:
+            for ev in pp.evidence:
+                if ev.source_url and ev.source_url not in urls:
+                    urls.append(ev.source_url)
+    
+    return urls
 
 
 def run(state: VentureForgeState) -> dict:
@@ -158,14 +224,36 @@ def run(state: VentureForgeState) -> dict:
                 markdown_content=raw["markdown_content"],
                 revision_count=state.get_revision_count(raw["idea_id"]),
             )
+            
+            # Validate and fix evidence_links
+            if not brief.evidence_links or len(brief.evidence_links) < 2:
+                logger.warning(
+                    f"[pitch_writer] LLM provided {len(brief.evidence_links)} evidence links for idea {brief.idea_id}, "
+                    "collecting from pain points"
+                )
+                collected_urls = _collect_evidence_urls(brief.idea_id, state)
+                if collected_urls:
+                    brief.evidence_links = collected_urls
+                    logger.info(
+                        f"[pitch_writer] Collected {len(collected_urls)} evidence URLs from pain points for idea {brief.idea_id}"
+                    )
+            
             briefs.append(brief)
         except Exception as e:
             logger.debug(f"[pitch_writer] skipping malformed pitch brief: {e}")
             continue
 
+    # Merge with existing briefs if in revision mode
+    if state.current_revision_idea_id:
+        # In revision mode: merge the new brief with existing briefs
+        all_briefs = state.pitch_briefs + briefs
+    else:
+        # Initial generation: replace all briefs
+        all_briefs = briefs
+
     patch = {
-        "pitch_briefs": briefs,
-        "current_stage": PipelineStage.WRITING,
+        "pitch_briefs": all_briefs,
+        "current_revision_idea_id": None,  # Clear revision flag
         "next_node": "orchestrator",
     }
     patch.update(

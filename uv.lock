@@ -5627,10 +5627,12 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "diskcache" },
+    { name = "fastapi" },
     { name = "gradio" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
     { name = "loguru" },
     { name = "openai" },
     { name = "praw" },
@@ -5639,7 +5641,9 @@ dependencies = [
     { name = "pytest" },
     { name = "python-dotenv" },
     { name = "requests" },
+    { name = "sse-starlette" },
     { name = "tenacity" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -5660,10 +5664,12 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "diskcache", specifier = ">=5.6.0" },
+    { name = "fastapi", specifier = ">=0.136.1" },
     { name = "gradio", specifier = ">=5.0.0" },
     { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.2.0" },
     { name = "langgraph", specifier = ">=0.2.0" },
+    { name = "langgraph-checkpoint", specifier = ">=4.0.3" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "openai", specifier = ">=1.0.0" },
@@ -5677,8 +5683,10 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
+    { name = "sse-starlette", specifier = ">=3.4.1" },
     { name = "tenacity", specifier = ">=8.2.0" },
     { name = "torch", marker = "extra == 'amd'", specifier = ">=2.4.0" },
+    { name = "uvicorn", specifier = ">=0.46.0" },
     { name = "vllm", marker = "extra == 'amd'", specifier = ">=0.6.0" },
 ]
 provides-extras = ["dev", "amd"]

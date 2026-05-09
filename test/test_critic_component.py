@@ -35,6 +35,7 @@ from src.state.schema import (
     FeasibilityRubric,
     NoveltyRubric,
 )
+from test.test_helpers import make_test_pain_point
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,30 +50,16 @@ def _make_minimal_state(
     max_revisions: int = 2,
 ) -> VentureForgeState:
     """Build a valid VentureForgeState with exactly one pitch brief ready to critique."""
-    pp1 = PainPoint(
-        id=uuid4(),
+    pp1 = make_test_pain_point(
         title="Developers struggle with Docker Compose",
         description="Managing multi-service local dev setups is painful and error-prone.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/docker/comments/abc123",
         raw_quote="I spend more time debugging docker-compose.yml than writing code.",
         source=DataSource.REDDIT,
     )
-    pp2 = PainPoint(
-        id=uuid4(),
+    pp2 = make_test_pain_point(
         title="CI pipelines take forever to debug",
         description="Developers waste hours reproducing CI failures locally.",
-        rubric=PainPointRubric(
-            is_genuine_current_frustration=True,
-            has_verbatim_quote=True,
-            user_segment_specific=True,
-        ),
-        passes_rubric=True,
         source_url="https://reddit.com/r/devops/comments/def456",
         raw_quote="Why does my test pass locally but fail in CI with the same Dockerfile?",
         source=DataSource.REDDIT,
@@ -151,37 +138,38 @@ def _make_minimal_state(
 
 
 def _make_wellformed_critic_response() -> str:
-    """Complete, well-formed LLM response."""
+    """Complete, well-formed LLM response with current 7-field rubric."""
     return json.dumps(
         {
             "reasoning_trace": (
-                "The tagline is 7 words. The go-to-market mentions Reddit and Hacker News "
-                "but does not name a specific community event. The target user 'solo developers' "
-                "is slightly broad. Competition section acknowledges current behavior but lacks "
-                "a sharp thesis."
+                "The tagline is 7 words. The target user 'solo developers and small teams' "
+                "is too broad - not a contained fire. The competition section mentions Docker Desktop "
+                "but lacks a clear thesis on why they won't solve this for the target niche. "
+                "Evidence has only 1 URL, needs at least 2."
             ),
             "rubric": {
                 "all_claims_evidence_backed": True,
                 "no_hallucinated_source_urls": True,
                 "tagline_under_12_words": True,
-                "target_is_contained_fire": False,
-                "competition_embraced_with_thesis": False,
-                "unscalable_acquisition_concrete": False,
-                "gtm_leads_with_manual_recruitment": False,
+                "target_is_contained_fire": False,  # This fails
+                "competition_embraced_with_thesis": False,  # This fails
+                "minimum_evidence_sources": False,  # This fails
+                "scorer_verdict_justified": True,
             },
             "all_pass": False,
             "approval_status": "revise",
             "failing_checks": [
                 "target_is_contained_fire",
                 "competition_embraced_with_thesis",
-                "unscalable_acquisition_concrete",
-                "gtm_leads_with_manual_recruitment",
+                "minimum_evidence_sources",
             ],
-            "target_agent": "pitch_writer",
+            "target_agent": "idea_generator",  # Positioning issues route to idea_generator
             "revision_feedback": (
                 "Target user is too broad — replace 'solo developers and small teams' with "
-                "a named community (e.g., 'Docker power users on r/docker'). GTM must name a "
-                "specific place and manual action (e.g., 'DM the top 50 posters in r/docker weekly thread')."
+                "a specific reachable community (e.g., 'React Native developers using Docker for mobile dev'). "
+                "Competition thesis is weak — explain why Docker Desktop won't serve this niche (e.g., "
+                "'Docker Desktop is optimized for backend devs, not mobile workflows'). "
+                "Add at least one more distinct source URL to evidence_links."
             ),
         }
     )
@@ -196,13 +184,13 @@ def _make_malformed_critic_response() -> str:
                 "all_claims_evidence_backed": True,
                 "no_hallucinated_source_urls": True,
                 "tagline_under_12_words": True,
-                "target_is_contained_fire": False,
-                "competition_embraced_with_thesis": False,
-                "unscalable_acquisition_concrete": False,
-                "gtm_leads_with_manual_recruitment": False,
+                "target_is_contained_fire": True,
+                "competition_embraced_with_thesis": True,
+                "minimum_evidence_sources": True,
+                "scorer_verdict_justified": True,
             },
-            "all_pass": False,
-            "approval_status": "revise",
+            "all_pass": True,
+            "approval_status": "approved",
             # Missing: target_agent, revision_feedback
         }
     )
@@ -214,18 +202,43 @@ def _make_malformed_critic_response() -> str:
 
 def test_auto_approve_at_max_revisions() -> None:
     """If revision_counts[idea_id] >= max_revisions, auto-approve."""
-    state = _make_minimal_state(max_revisions=2)
-    idea_id = str(state.pitch_briefs[0].idea_id)
-    state = state.model_copy(update={"revision_counts": {idea_id: 2}})
+    with patch("src.llm.client.get_llm") as mock_get_llm:
+        # Mock LLM to return a failing critique
+        fake_llm = MagicMock()
+        fake_response = MagicMock()
+        fake_response.content = json.dumps({
+            "reasoning_trace": "Pitch has issues but max revisions reached.",
+            "rubric": {
+                "all_claims_evidence_backed": False,
+                "no_hallucinated_source_urls": False,
+                "tagline_under_12_words": True,
+                "target_is_contained_fire": False,
+                "competition_embraced_with_thesis": False,
+                "minimum_evidence_sources": False,
+                "scorer_verdict_justified": True,
+            },
+            "all_pass": False,
+            "approval_status": "revise",
+            "failing_checks": ["all_claims_evidence_backed", "no_hallucinated_source_urls", "target_is_contained_fire", "competition_embraced_with_thesis", "minimum_evidence_sources"],
+            "target_agent": "idea_generator",
+            "revision_feedback": "Multiple issues but max revisions reached.",
+        })
+        fake_llm.invoke.return_value = fake_response
+        mock_get_llm.return_value = fake_llm
 
-    result = run_critic(state)
-    assert "critique" in result, "Expected critique in result"
-    critique: Critique = result["critique"]
-    assert critique.all_pass is True, f"Expected all_pass=True, got {critique.all_pass}"
-    assert critique.approval_status == "approved", f"Expected approved, got {critique.approval_status}"
-    assert critique.target_agent == "pitch_writer"
-    assert "Max revisions reached" in critique.reasoning_trace
-    print("  PASS")
+        state = _make_minimal_state(max_revisions=2)
+        idea_id = str(state.pitch_briefs[0].idea_id)
+        state = state.model_copy(update={"revision_counts": {idea_id: 2}})
+
+        result = run_critic(state)
+        assert "critique" in result, "Expected critique in result"
+        critique: Critique = result["critique"]
+        # Even though LLM returned failing rubric, auto-approve overrides it
+        assert critique.all_pass is True, f"Expected all_pass=True, got {critique.all_pass}"
+        assert critique.approval_status == "approved", f"Expected approved, got {critique.approval_status}"
+        assert critique.target_agent == "pitch_writer"
+        assert "Max revisions reached" in critique.reasoning_trace
+        print("  PASS")
 
 
 def test_empty_pitch_briefs_returns_no_critique() -> None:
@@ -252,8 +265,11 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
         critique: Critique = result["critique"]
         assert critique.approval_status == "revise", f"Got status={critique.approval_status}"
         assert critique.all_pass is False
-        assert critique.target_agent == "pitch_writer"
-        assert len(critique.failing_checks) == 4, f"Expected 4 failing checks, got {critique.failing_checks}"
+        assert critique.target_agent == "idea_generator", f"Expected idea_generator, got {critique.target_agent}"
+        assert len(critique.failing_checks) == 3, f"Expected 3 failing checks, got {critique.failing_checks}"
+        assert "target_is_contained_fire" in critique.failing_checks
+        assert "competition_embraced_with_thesis" in critique.failing_checks
+        assert "minimum_evidence_sources" in critique.failing_checks
         assert critique.revision_feedback
         print("  PASS")
 
@@ -316,6 +332,7 @@ def test_wrapped_critique_object_unwrapped() -> None:
 
         assert "critique" in result
         assert result["critique"].approval_status == "revise"
+        assert result["critique"].target_agent == "idea_generator"
         print("  PASS")
 
 
