@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from src.agents.orchestrator import orchestrator
 from src.state.schema import (
+    CompetitiveLandscape,
     Critique,
     CritiqueRubric,
     DataSource,
@@ -25,6 +26,7 @@ from src.state.schema import (
     PitchBrief,
     PipelineStage,
     ScoredIdea,
+    ValidationPlan,
     VentureForgeState,
 )
 from test.test_helpers import make_test_pain_point
@@ -89,15 +91,31 @@ def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, re
         solution=idea.solution,
         target_user=idea.target_user,
         market_opportunity="Large dev tools market with growing Docker adoption.",
+        competitive_landscape=CompetitiveLandscape(
+            current_behavior="Developers manually edit YAML files and debug via trial-and-error restarts",
+            direct_competitors="Docker Desktop, VS Code extensions, and manual YAML editing",
+            real_enemy="The habit of editing raw YAML without validation or visual feedback"
+        ),
+        differentiation="Visual editor with real-time validation vs manual YAML editing",
+        validation_plan=ValidationPlan(
+            discovery_questions=[
+                "Walk me through the last time you debugged a Docker Compose issue",
+                "How much time do you spend on Docker Compose configuration weekly?",
+                "What frustrates you most about your current workflow?",
+                "What would make you switch from your current approach?",
+                "How do you currently validate your Docker Compose files?"
+            ],
+            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
+        ),
         business_model="Monthly subscription with freemium tier included.",
         go_to_market="Direct outreach to r/docker power users and small teams.",
         key_risk="Incumbents may copy quickly.",
         next_steps="Build MVP and recruit beta users.",
         evidence_links=[pp1.source_url],
         markdown_content=(
-            "# Pitch\n\nThis markdown content is intentionally long enough to pass schema.\n"
-            "It should be well over one hundred characters to satisfy validation.\n"
-            "Problem, solution, market, and GTM details live here.\n"
+            "# Pitch\\n\\nThis markdown content is intentionally long enough to pass schema.\\n"
+            "It should be well over one hundred characters to satisfy validation.\\n"
+            "Problem, solution, market, and GTM details live here.\\n"
         ),
         revision_count=revision_count,
     )
@@ -109,6 +127,7 @@ def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, re
         competition_embraced_with_thesis=True,
         minimum_evidence_sources=True,
         scorer_verdict_justified=True,
+        validation_plan_complete=True,
     )
     critique = Critique(
         idea_id=idea.id,
@@ -147,14 +166,22 @@ def test_routes_to_mining_when_no_pain_points() -> None:
 
 
 def test_routes_to_generator_when_no_ideas() -> None:
-    pp = make_test_pain_point(
+    pp1 = make_test_pain_point(
         title="Some pain",
         description="A sufficiently long description for schema validation.",
         source_url="https://reddit.com/r/x/comments/1",
         raw_quote="This is a real quote that is long enough.",
         source=DataSource.REDDIT,
     )
-    state = VentureForgeState(domain="test", pain_points=[pp], ideas=[])
+    pp2 = make_test_pain_point(
+        title="Another pain",
+        description="Another sufficiently long description for schema validation.",
+        source_url="https://reddit.com/r/x/comments/2",
+        raw_quote="This is another real quote that is long enough.",
+        source=DataSource.REDDIT,
+    )
+    # Need at least 2 pain points to pass the MIN_PAIN_POINTS_FOR_IDEAS quality gate
+    state = VentureForgeState(domain="test", pain_points=[pp1, pp2], ideas=[])
     patch = orchestrator(state)
     assert patch["current_stage"] == PipelineStage.GENERATING
     assert patch["next_node"] == "idea_generator"

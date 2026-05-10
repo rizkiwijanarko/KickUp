@@ -34,8 +34,8 @@ _REQUEST_TIMEOUT: int = 15
 _MAX_RESULTS_PER_QUERY: int = 50
 _MIN_COMMENT_LENGTH: int = 40
 
-# Filter for content from the last 2 years (730 days)
-_TWO_YEARS_AGO = int(time.time()) - (730 * 24 * 60 * 60)
+# Filter for content from the last 1 years (365 days)
+_TWO_YEARS_AGO = int(time.time()) - (365 * 24 * 60 * 60)
 
 # Search queries targeting frustration/pain points
 _SEARCH_QUERIES: list[str] = [

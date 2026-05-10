@@ -36,15 +36,18 @@ _MIN_CONTENT_LENGTH: int = 50
 
 # Search query templates targeting user frustrations
 _SEARCH_TEMPLATES: list[str] = [
-    '"{domain}" frustrated users forum',
-    '"{domain}" biggest problem complaint',
-    '"{domain}" "I wish" OR "I hate" OR "pain point"',
-    '"{domain}" user feedback negative review',
-    '"{domain}" community discussion problem',
+    '"{domain}" site:reddit.com OR site:twitter.com OR site:x.com',
+    '"{domain}" frustrated users forum community',
+    '"{domain}" biggest problem complaint reddit',
+    '"{domain}" "I wish" OR "I hate" OR "pain point" site:reddit.com',
+    '"{domain}" user feedback negative review community',
 ]
 
-# Domains to prioritize (forums, Q&A, communities)
+# Domains to prioritize (social media, forums, Q&A, communities)
 _PRIORITY_DOMAINS: list[str] = [
+    "reddit.com",
+    "twitter.com",
+    "x.com",
     "stackoverflow.com",
     "news.ycombinator.com",
     "dev.to",
@@ -63,10 +66,11 @@ _EXCLUDED_DOMAINS: list[str] = [
     "tiktok.com",
     "instagram.com",
     "facebook.com",
-    "twitter.com",
-    "x.com",
     "pinterest.com",
     "amazon.com",
+    "forbes.com",  # Generic business news, not user complaints
+    "techcrunch.com",  # News, not user feedback
+    "venturebeat.com",  # News, not user feedback
 ]
 
 
@@ -148,7 +152,11 @@ def _result_to_comments(result: dict) -> list[ScrapedComment]:
 
     # Determine source label from URL
     source_label = "web"
-    if "stackoverflow.com" in url:
+    if "reddit.com" in url:
+        source_label = "reddit"
+    elif "twitter.com" in url or "x.com" in url:
+        source_label = "twitter"
+    elif "stackoverflow.com" in url:
         source_label = "stackoverflow"
     elif "github.com" in url:
         source_label = "github"

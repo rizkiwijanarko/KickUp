@@ -67,7 +67,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
     # Use reasoning=False to disable thinking mode for structured JSON output
-    llm = get_llm(temperature=0.1, max_tokens=4096, reasoning=False)
+    llm = get_llm(temperature=0.1, max_tokens=16384, reasoning=False)
     
     # Add explicit JSON-only instruction
     system_prompt = _build_system_prompt()
@@ -168,7 +168,7 @@ def run(state: VentureForgeState) -> dict:
 
     patch = {
         "scored_ideas": scored_ideas,
-
+        "scorer_attempts": state.scorer_attempts + 1,
         "next_node": "orchestrator",
     }
     patch.update(

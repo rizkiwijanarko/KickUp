@@ -15,11 +15,38 @@ from src.run_controller import (
     is_cancel_requested,
     is_run_active,
     poll_state,
-
     request_cancel,
     start_run,
 )
 from src.state.schema import PipelineStage
+
+
+# =============================================================================
+# DOMAIN RECOMMENDATIONS
+# =============================================================================
+
+DOMAIN_RECOMMENDATIONS = [
+    "developer tools",
+    "healthcare",
+    "finance & fintech",
+    "education",
+    "food service",
+    "e-commerce",
+    "marketing & social media",
+    "real estate",
+    "transportation",
+    "AI & machine learning",
+    "productivity tools",
+    "fashion & retail",
+    "sports & fitness",
+    "agriculture",
+    "content creation",
+]
+
+
+# =============================================================================
+# FORMATTING UTILITIES
+# =============================================================================
 
 
 def format_state_summary(state) -> str:
@@ -250,6 +277,11 @@ def export_markdown(state) -> str:
     return md
 
 
+# =============================================================================
+# PIPELINE CONTROL
+# =============================================================================
+
+
 def start_pipeline(
     domain: str,
     max_pain_points: int,
@@ -308,7 +340,7 @@ def start_pipeline(
         )
 
 
-def update_progress(run_id: str) -> tuple[str, str, str, str, str, str, str]:
+def update_progress(run_id: str) -> tuple[str, str, str, str, str, str]:
     """Poll for state updates and return new UI state."""
     if not run_id or not is_run_active():
         return gr.skip()
@@ -335,6 +367,36 @@ def stop_pipeline(run_id: str) -> str:
     return "No active run to stop."
 
 
+def clear_cache() -> str:
+    """Clear the LangGraph checkpoint cache and scraper caches."""
+    import shutil
+    from pathlib import Path
+    
+    # Check if any runs are active
+    from src.run_controller import _active_runs
+    if _active_runs:
+        return "❌ Cannot clear cache while runs are active. Stop all runs first."
+    
+    cache_dir = Path(settings.cache_dir)
+    if cache_dir.exists():
+        try:
+            # Remove all cache contents
+            shutil.rmtree(cache_dir)
+            # Recreate empty cache directory
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            return "✅ Cache cleared successfully. All previous run data has been deleted."
+        except PermissionError as e:
+            return f"❌ Cache is locked (database in use). Stop the app and clear manually: rm -rf {cache_dir}"
+        except Exception as e:
+            return f"❌ Error clearing cache: {str(e)}"
+    return "ℹ️ Cache directory does not exist."
+
+
+# =============================================================================
+# UI CONSTRUCTION
+# =============================================================================
+
+
 def create_ui() -> gr.Blocks:
     """Create and return the Gradio UI."""
     with gr.Blocks(title="VentureForge - AI Startup Discovery") as app:
@@ -349,6 +411,12 @@ def create_ui() -> gr.Blocks:
 
         with gr.Row():
             with gr.Column(scale=2):
+                domain_recommendation = gr.Dropdown(
+                    choices=DOMAIN_RECOMMENDATIONS,
+                    label="Domain Recommendations",
+                    info="Select a recommended domain or type your own below",
+                )
+                
                 domain_input = gr.Textbox(
                     label="Domain",
                     placeholder="e.g., developer tools, healthcare, fintech",
@@ -358,27 +426,28 @@ def create_ui() -> gr.Blocks:
             with gr.Column(scale=1):
                 start_btn = gr.Button("🚀 Start Discovery", variant="primary", size="lg")
                 stop_btn = gr.Button("⏹️ Stop", variant="stop")
+                clear_cache_btn = gr.Button("🗑️ Clear Cache", variant="secondary")
 
         with gr.Accordion("⚙️ Advanced Settings", open=False):
             with gr.Row():
                 max_pain_points = gr.Slider(
                     minimum=5,
-                    maximum=100,
-                    value=settings.max_pain_points,
-                    step=5,
+                    maximum=10,
+                    value=5,
+                    step=1,
                     label="Max Pain Points",
                 )
                 ideas_per_run = gr.Slider(
                     minimum=1,
-                    maximum=20,
-                    value=settings.ideas_per_run,
+                    maximum=5,
+                    value=2,
                     step=1,
                     label="Ideas per Run",
                 )
                 top_n_pitches = gr.Slider(
                     minimum=1,
-                    maximum=10,
-                    value=settings.top_n_pitches,
+                    maximum=5,
+                    value=3,
                     step=1,
                     label="Top N Pitches",
                 )
@@ -421,6 +490,12 @@ def create_ui() -> gr.Blocks:
         status_message = gr.Textbox(label="Status", interactive=False, visible=True)
 
         # Event handlers
+        domain_recommendation.change(
+            fn=lambda x: x if x else "",
+            inputs=[domain_recommendation],
+            outputs=[domain_input],
+        )
+        
         start_btn.click(
             fn=start_pipeline,
             inputs=[domain_input, max_pain_points, ideas_per_run, top_n_pitches, max_revisions],
@@ -439,6 +514,12 @@ def create_ui() -> gr.Blocks:
         stop_btn.click(
             fn=stop_pipeline,
             inputs=[run_id_display],
+            outputs=[status_message],
+        )
+
+        clear_cache_btn.click(
+            fn=clear_cache,
+            inputs=[],
             outputs=[status_message],
         )
 

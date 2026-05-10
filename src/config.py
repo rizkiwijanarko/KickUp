@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     product_hunt_api_key: str | None = Field(default=None)
 
     # ------------------------------------------------------------------
+    # YouTube Data API v3 — for scraping video comments
+    # Get key at: https://console.cloud.google.com/apis/credentials
+    # Free quota: 10,000 units/day
+    # ------------------------------------------------------------------
+    youtube_api_key: str | None = Field(default=None)
+
+    # ------------------------------------------------------------------
     # HuggingFace (for AMD vLLM model download)
     # ------------------------------------------------------------------
     hf_token: str | None = Field(default=None)
@@ -99,7 +106,10 @@ class Settings(BaseSettings):
     # Pipeline Defaults
     # ------------------------------------------------------------------
     max_pain_points: int = Field(default=30, ge=5, le=100)
-    ideas_per_run: int = Field(default=5, ge=1, le=20)
+    # TEMPORARY: Reduced from 5 to 2 due to vLLM server max_tokens limit (~2048)
+    # The server truncates responses at ~1600 tokens, so we generate fewer ideas per call
+    # TODO: Increase back to 5 once server --max-tokens is increased to 16384
+    ideas_per_run: int = Field(default=2, ge=1, le=20)
     top_n_pitches: int = Field(default=3, ge=1, le=10)
     max_revisions: int = Field(default=2, ge=0, le=5)
     lookback_days: int = Field(default=90, ge=7, le=365)

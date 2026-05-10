@@ -240,6 +240,18 @@ class TestComponents:
             assert brief.solution, "Pitch must describe solution"
             assert brief.target_user, "Pitch must identify target user"
             assert brief.market_opportunity, "Pitch must describe market"
+            
+            # Phase 1-3: New fields
+            assert brief.competitive_landscape, "Pitch must have competitive_landscape"
+            assert brief.competitive_landscape.current_behavior, "Must describe current behavior"
+            assert brief.competitive_landscape.direct_competitors, "Must name competitors"
+            assert brief.competitive_landscape.real_enemy, "Must identify habit to break"
+            assert brief.differentiation, "Pitch must explain differentiation"
+            assert brief.validation_plan, "Pitch must have validation_plan"
+            assert len(brief.validation_plan.discovery_questions) == 5, \
+                f"Must have exactly 5 discovery questions, got {len(brief.validation_plan.discovery_questions)}"
+            assert brief.validation_plan.validation_criteria, "Must have validation criteria"
+            
             assert brief.business_model, "Pitch must describe business model"
             assert brief.go_to_market, "Pitch must describe GTM strategy"
             assert brief.key_risk, "Pitch must identify key risk"

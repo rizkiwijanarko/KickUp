@@ -25,19 +25,13 @@ def _build_system_prompt() -> str:
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
-    # Critique the pitch brief corresponding to the highest-scoring idea
-    # (top_scored_ideas[0]) when possible; fall back to the first brief.
+    # Critique the pitch brief at current_critique_index
     if not state.pitch_briefs:
         return "No pitch briefs to review."
-
-    brief = state.pitch_briefs[0]
-    if state.scored_ideas:
-        top_ids = [s.idea_id for s in state.top_scored_ideas]
-        for idea_id in top_ids:
-            match = next((b for b in state.pitch_briefs if b.idea_id == idea_id), None)
-            if match is not None:
-                brief = match
-                break
+    
+    # Get the brief at current index (bounded by available briefs)
+    index = min(state.current_critique_index, len(state.pitch_briefs) - 1)
+    brief = state.pitch_briefs[index]
 
     revision_count = state.get_revision_count(brief.idea_id)
 
@@ -48,10 +42,17 @@ def _build_user_prompt(state: VentureForgeState) -> str:
             scored_idea = s.model_dump(mode="json")
             break
 
+    # Serialize the full pitch brief structure (including nested fields)
+    brief_dict = brief.model_dump(mode="json")
+    # Convert UUID to string for JSON serialization
+    brief_dict["idea_id"] = str(brief_dict["idea_id"])
+
     user_text = (
         f"Domain: {state.domain}\n"
-        f"Current Revision Count: {revision_count}\n\n"
-        f"PITCH BRIEF TO REVIEW:\n{brief.markdown_content}\n\n"
+        f"Current Revision Count: {revision_count}\n"
+        f"Reviewing brief {index + 1} of {len(state.pitch_briefs)}\n\n"
+        f"PITCH BRIEF TO REVIEW (structured):\n{json.dumps(brief_dict, indent=2)}\n\n"
+        f"PITCH BRIEF MARKDOWN:\n{brief.markdown_content}\n\n"
         f"SCORER OUTPUT FOR THIS IDEA:\n{json.dumps(scored_idea, indent=2) if scored_idea else 'Not found'}\n\n"
         "Provide a brutal, honest critique using the binary rubric. "
         "If it fails any check, specify which worker should fix it. "
@@ -111,15 +112,9 @@ def run(state: VentureForgeState) -> dict:
         )
         return patch
 
-    # Select the brief to critique (prefer highest-scoring idea)
-    brief = state.pitch_briefs[0]
-    if state.scored_ideas:
-        top_ids = [s.idea_id for s in state.top_scored_ideas]
-        for idea_id in top_ids:
-            match = next((b for b in state.pitch_briefs if b.idea_id == idea_id), None)
-            if match is not None:
-                brief = match
-                break
+    # Select the brief to critique using current_critique_index
+    index = min(state.current_critique_index, len(state.pitch_briefs) - 1)
+    brief = state.pitch_briefs[index]
 
     # Check if we're at max revisions (but still run the LLM to evaluate the final revision)
     at_max_revisions = state.get_revision_count(brief.idea_id) >= state.max_revisions
@@ -159,32 +154,18 @@ def run(state: VentureForgeState) -> dict:
         
         critique = Critique(**raw)
         
-        # If we're at max revisions AND the critique still fails, auto-approve
+        # If we're at max revisions AND the critique still fails, mark as max_revisions_reached
         if at_max_revisions and not critique.all_pass:
-            logger.info(
+            logger.warning(
                 f"[critic] Max revisions reached for idea {brief.idea_id}. "
-                f"LLM critique failed but auto-approving anyway."
+                f"LLM critique failed but cannot revise further. "
+                f"Marking as 'max_revisions_reached' instead of 'approved'."
             )
-            # Override the critique to approve
-            critique = Critique(
-                idea_id=brief.idea_id,
-                reasoning_trace=(
-                    f"Max revisions reached. Original critique: {critique.reasoning_trace}"
-                ),
-                rubric=CritiqueRubric(
-                    all_claims_evidence_backed=True,
-                    no_hallucinated_source_urls=True,
-                    tagline_under_12_words=True,
-                    target_is_contained_fire=True,
-                    competition_embraced_with_thesis=True,
-                ),
-                all_pass=True,
-                approval_status="approved",
-                target_agent="pitch_writer",
-                revision_feedback=(
-                    f"Max revisions reached — approved by default. "
-                    f"Original feedback: {critique.revision_feedback}"
-                ),
+            # Keep the critique honest (all_pass=False) but change approval_status
+            critique.approval_status = "max_revisions_reached"
+            critique.revision_feedback = (
+                f"Max revisions reached ({state.max_revisions}). Cannot revise further. "
+                f"Original feedback: {critique.revision_feedback}"
             )
 
         patch = {

@@ -10,8 +10,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.llm.client import extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
+    CompetitiveLandscape,
     PipelineStage,
     PitchBrief,
+    ValidationPlan,
     VentureForgeState,
 )
 
@@ -37,6 +39,11 @@ def _build_user_prompt(state: VentureForgeState) -> str:
             top_ideas = [target_scored]
     else:
         top_ideas = state.top_scored_ideas
+    
+    # FIX #1: Validate that we have ideas to write briefs for
+    if not top_ideas:
+        logger.warning("[pitch_writer] No top scored ideas available for writing pitch briefs")
+        return ""  # Will be handled by run() function
     
     ideas_map = {str(idea.id): idea for idea in state.ideas}
 
@@ -119,10 +126,20 @@ def _build_user_prompt(state: VentureForgeState) -> str:
     return user_text
 
 
-def _invoke_llm(state: VentureForgeState) -> list[dict]:
+def _invoke_llm(state: VentureForgeState, retry_count: int = 0) -> list[dict]:
+    """Invoke LLM to generate pitch briefs with retry logic.
+    
+    Args:
+        state: Current pipeline state
+        retry_count: Current retry attempt (0-indexed)
+    
+    Returns:
+        List of raw pitch brief dicts, or empty list on failure
+    """
     # Pitch briefs are long (~6K tokens per brief x 3 briefs = ~18K tokens)
-    # Set max_tokens to 8192 to avoid truncation
-    llm = get_llm(temperature=0.4, max_tokens=8192, reasoning=False)
+    # Increase max_tokens to 16384 to avoid truncation for 3 full briefs
+    # FIX #6: Increase temperature from 0.4 to 0.6 for more creative pitch writing
+    llm = get_llm(temperature=0.6, max_tokens=16384, reasoning=False)
     
     # Add explicit JSON-only instruction
     system_prompt = _build_system_prompt()
@@ -138,10 +155,11 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
         raw = llm.invoke(messages)
         content = raw.content if hasattr(raw, "content") else str(raw)
     except Exception as e:
-        logger.error(f"[pitch_writer] LLM invocation failed: {e}")
+        logger.error(f"[pitch_writer] LLM invocation failed (attempt {retry_count + 1}): {e}")
         return []
 
-    logger.info(f"[pitch_writer] LLM responded in {time.monotonic()-start:.1f}s")
+    elapsed = time.monotonic() - start
+    logger.info(f"[pitch_writer] LLM responded in {elapsed:.1f}s (attempt {retry_count + 1})")
     
     # Debug: log response preview and check for truncation
     logger.info(f"[pitch_writer] Response preview (first 500 chars): {content[:500]}")
@@ -156,8 +174,21 @@ def _invoke_llm(state: VentureForgeState) -> list[dict]:
 
     parsed = extract_json(content)
     if parsed is None:
-        logger.error(f"[pitch_writer] JSON extraction failed. Response length: {len(content)} chars")
+        logger.error(
+            f"[pitch_writer] JSON extraction failed (attempt {retry_count + 1}). "
+            f"Response length: {len(content)} chars"
+        )
         logger.error(f"[pitch_writer] Full response (first 2000 chars): {content[:2000]}")
+        logger.error(f"[pitch_writer] Full response (last 500 chars): {content[-500:]}")
+        
+        # Log specific failure reason for debugging
+        if len(content) == 0:
+            logger.error("[pitch_writer] Failure reason: Empty response from LLM")
+        elif not content.rstrip().endswith((']', '}')):
+            logger.error("[pitch_writer] Failure reason: Response truncated (incomplete JSON)")
+        else:
+            logger.error("[pitch_writer] Failure reason: Invalid JSON syntax")
+        
         return []
 
     if isinstance(parsed, dict) and "pitch_briefs" in parsed:
@@ -175,8 +206,9 @@ def _collect_evidence_urls(idea_id: str, state: VentureForgeState) -> list[str]:
     if not idea:
         return urls
     
+    # FIX #2: Use filtered_pain_points instead of pain_points
     for pp_id in idea.addresses_pain_point_ids:
-        pp = next((p for p in state.pain_points if str(p.id) == str(pp_id)), None)
+        pp = next((p for p in state.filtered_pain_points if str(p.id) == str(pp_id)), None)
         if pp and hasattr(pp, 'evidence') and pp.evidence:
             for ev in pp.evidence:
                 if ev.source_url and ev.source_url not in urls:
@@ -192,6 +224,7 @@ def run(state: VentureForgeState) -> dict:
             "pitch_briefs": [],
             "current_stage": PipelineStage.WRITING,
             "next_node": "orchestrator",
+            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
         }
         patch.update(
             state.add_event(
@@ -202,12 +235,118 @@ def run(state: VentureForgeState) -> dict:
             )
         )
         return patch
+    
+    # FIX #1: Check if top_scored_ideas is empty (all ideas are "park")
+    if not state.top_scored_ideas:
+        logger.warning("[pitch_writer] all scored ideas have 'park' verdict, no briefs to write")
+        patch = {
+            "pitch_briefs": [],
+            "current_stage": PipelineStage.WRITING,
+            "next_node": "orchestrator",
+            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+        }
+        patch.update(
+            state.add_event(
+                agent="pitch_writer",
+                stage=PipelineStage.WRITING,
+                kind="warning",
+                message="All scored ideas have 'park' verdict. No pitch briefs to write.",
+            )
+        )
+        return patch
 
-    raw_briefs = _invoke_llm(state)
+    # Retry logic: attempt up to 3 times if LLM fails
+    MAX_RETRIES = 3
+    raw_briefs = []
+    
+    for retry in range(MAX_RETRIES):
+        raw_briefs = _invoke_llm(state, retry_count=retry)
+        
+        if raw_briefs:
+            # Success - got valid briefs
+            logger.info(f"[pitch_writer] Successfully generated {len(raw_briefs)} briefs on attempt {retry + 1}")
+            break
+        
+        if retry < MAX_RETRIES - 1:
+            logger.warning(
+                f"[pitch_writer] Attempt {retry + 1}/{MAX_RETRIES} failed to generate briefs. "
+                f"Retrying..."
+            )
+        else:
+            logger.error(
+                f"[pitch_writer] All {MAX_RETRIES} attempts failed to generate briefs. "
+                f"Falling back to keeping existing briefs."
+            )
+    
+    # Fallback: if in revision mode and all retries failed, keep the old brief
+    if not raw_briefs and state.current_revision_idea_id:
+        logger.warning(
+            f"[pitch_writer] Revision failed for idea {state.current_revision_idea_id}. "
+            f"Keeping existing brief and marking revision as failed."
+        )
+        
+        # Find the existing brief for this idea
+        existing_brief = next(
+            (b for b in state.pitch_briefs if b.idea_id == state.current_revision_idea_id),
+            None
+        )
+        
+        if existing_brief:
+            patch = {
+                "pitch_briefs": state.pitch_briefs,  # Keep all existing briefs
+                "current_revision_idea_id": None,
+                "next_node": "orchestrator",
+                "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+            }
+            patch.update(
+                state.add_event(
+                    agent="pitch_writer",
+                    stage=PipelineStage.WRITING,
+                    kind="error",
+                    message=f"Failed to revise pitch brief for idea {state.current_revision_idea_id} after {MAX_RETRIES} attempts. Keeping original brief.",
+                    idea_id=state.current_revision_idea_id,
+                )
+            )
+            return patch
+    
+    # If no briefs generated and not in revision mode, return empty
+    if not raw_briefs:
+        logger.error("[pitch_writer] Failed to generate any briefs after all retries")
+        patch = {
+            "pitch_briefs": [],
+            "current_stage": PipelineStage.WRITING,
+            "next_node": "orchestrator",
+            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+        }
+        patch.update(
+            state.add_event(
+                agent="pitch_writer",
+                stage=PipelineStage.WRITING,
+                kind="error",
+                message=f"Failed to generate pitch briefs after {MAX_RETRIES} attempts.",
+            )
+        )
+        return patch
+
     briefs: list[PitchBrief] = []
 
     for raw in raw_briefs:
         try:
+            # Parse nested competitive_landscape
+            comp_landscape_raw = raw.get("competitive_landscape", {})
+            competitive_landscape = CompetitiveLandscape(
+                current_behavior=comp_landscape_raw.get("current_behavior", ""),
+                direct_competitors=comp_landscape_raw.get("direct_competitors", ""),
+                real_enemy=comp_landscape_raw.get("real_enemy", "")
+            )
+            
+            # Parse nested validation_plan
+            val_plan_raw = raw.get("validation_plan", {})
+            validation_plan = ValidationPlan(
+                discovery_questions=val_plan_raw.get("discovery_questions", []),
+                validation_criteria=val_plan_raw.get("validation_criteria", "")
+            )
+            
             brief = PitchBrief(
                 idea_id=raw["idea_id"],
                 title=raw["title"],
@@ -216,6 +355,9 @@ def run(state: VentureForgeState) -> dict:
                 solution=raw["solution"],
                 target_user=raw["target_user"],
                 market_opportunity=raw["market_opportunity"],
+                competitive_landscape=competitive_landscape,
+                differentiation=raw.get("differentiation", ""),
+                validation_plan=validation_plan,
                 business_model=raw["business_model"],
                 go_to_market=raw["go_to_market"],
                 key_risk=raw["key_risk"],
@@ -240,13 +382,14 @@ def run(state: VentureForgeState) -> dict:
             
             briefs.append(brief)
         except Exception as e:
-            logger.debug(f"[pitch_writer] skipping malformed pitch brief: {e}")
+            logger.warning(f"[pitch_writer] skipping malformed pitch brief: {e}")
             continue
 
     # Merge with existing briefs if in revision mode
     if state.current_revision_idea_id:
-        # In revision mode: merge the new brief with existing briefs
-        all_briefs = state.pitch_briefs + briefs
+        # FIX #5: Deduplicate by idea_id (new brief replaces old)
+        existing_ids = {b.idea_id for b in briefs}
+        all_briefs = [b for b in state.pitch_briefs if b.idea_id not in existing_ids] + briefs
     else:
         # Initial generation: replace all briefs
         all_briefs = briefs
@@ -255,6 +398,7 @@ def run(state: VentureForgeState) -> dict:
         "pitch_briefs": all_briefs,
         "current_revision_idea_id": None,  # Clear revision flag
         "next_node": "orchestrator",
+        "pitch_writer_attempts": state.pitch_writer_attempts + 1,
     }
     patch.update(
         state.add_event(

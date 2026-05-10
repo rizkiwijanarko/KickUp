@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 # =============================================================================
 # ENUMS
@@ -34,6 +34,7 @@ class DataSource(str, Enum):
     HACKERNEWS = "hackernews"
     PRODUCTHUNT = "producthunt"
     WEB = "web"
+    YOUTUBE = "youtube"
 
 
 class Verdict(str, Enum):
@@ -125,6 +126,7 @@ class CritiqueRubric(BaseModel):
     Reduced from 7 to 5 checks - removed manual outreach requirements.
     Added minimum_evidence_sources check to ensure multiple sources.
     Added scorer_verdict_justified check to validate Scorer output.
+    Phase 3: Added validation_plan_complete check for discovery questions.
     """
 
     all_claims_evidence_backed: bool
@@ -134,6 +136,7 @@ class CritiqueRubric(BaseModel):
     competition_embraced_with_thesis: bool
     minimum_evidence_sources: bool  # At least 2 distinct source URLs
     scorer_verdict_justified: bool  # Scorer's "pursue" verdict aligns with pitch quality
+    validation_plan_complete: bool  # Exactly 5 open-ended discovery questions
 
 
 # =============================================================================
@@ -229,8 +232,71 @@ class ScoredIdea(BaseModel):
         return self
 
 
+class CompetitiveLandscape(BaseModel):
+    """Competitive analysis for a startup idea.
+    
+    Per orchestration.json and PROMPTS.md, this captures:
+    - What users currently do instead of using this product
+    - Direct competitors solving the same problem
+    - The specific habit/behavior this product must replace
+    """
+
+    current_behavior: str = Field(
+        ...,
+        min_length=20,
+        description="What customers do today instead of using this product (the real competitor)"
+    )
+    direct_competitors: str = Field(
+        ...,
+        min_length=10,
+        description="Companies solving the same problem, if any"
+    )
+    real_enemy: str = Field(
+        ...,
+        min_length=10,
+        description="The specific habit or behavior this product must replace"
+    )
+    
+    @field_validator('direct_competitors', mode='before')
+    @classmethod
+    def convert_list_to_string(cls, v):
+        """Convert list of competitors to comma-separated string.
+        
+        The LLM often generates a list like ["Conan", "vcpkg", "CMake"],
+        but the schema expects a string like "Conan, vcpkg, CMake".
+        """
+        if isinstance(v, list):
+            return ", ".join(str(item) for item in v)
+        return v
+
+
+class ValidationPlan(BaseModel):
+    """Customer discovery and validation strategy.
+    
+    Per orchestration.json and PROMPTS.md, this includes:
+    - 5 open-ended discovery questions for customer interviews
+    - Specific signals that prove the problem is real
+    """
+
+    discovery_questions: list[str] = Field(
+        ...,
+        min_length=5,
+        max_length=5,
+        description="5 open-ended questions for customer discovery (no yes/no questions)"
+    )
+    validation_criteria: str = Field(
+        ...,
+        min_length=20,
+        description="Specific signals that prove the problem is real and worth solving"
+    )
+
+
 class PitchBrief(BaseModel):
-    """A one-page investor pitch brief written for a single idea."""
+    """A one-page investor pitch brief written for a single idea.
+    
+    Extended per orchestration.json spec to include competitive analysis,
+    differentiation, and validation planning.
+    """
 
     idea_id: UUID
     title: str = Field(..., min_length=3, max_length=120)
@@ -239,13 +305,30 @@ class PitchBrief(BaseModel):
     solution: str = Field(..., min_length=20)
     target_user: str = Field(..., min_length=5)
     market_opportunity: str = Field(..., min_length=20)
+    competitive_landscape: CompetitiveLandscape
+    differentiation: str = Field(
+        ...,
+        min_length=20,
+        description="Why someone would switch from current behavior to this product"
+    )
+    validation_plan: ValidationPlan
     business_model: str = Field(..., min_length=20)
     go_to_market: str = Field(..., min_length=20)
     key_risk: str = Field(..., min_length=10)
     next_steps: str = Field(..., min_length=10)
-    evidence_links: list[str] = Field(default_factory=list)
+    # FIX #4: Reduced min_length from 2 to 1 (LLM often generates only 1 link)
+    evidence_links: list[str] = Field(..., min_length=1)
     markdown_content: str = Field(..., min_length=100)
     revision_count: int = Field(default=0, ge=0, le=2)
+    
+    # FIX #3: Validate tagline word count (prompt says "under 12 words")
+    @field_validator('tagline')
+    @classmethod
+    def validate_tagline_word_count(cls, v: str) -> str:
+        word_count = len(v.split())
+        if word_count > 12:
+            raise ValueError(f"Tagline must be under 12 words (got {word_count})")
+        return v
 
 
 class Critique(BaseModel):
@@ -260,7 +343,7 @@ class Critique(BaseModel):
     reasoning_trace: str
     rubric: CritiqueRubric
     all_pass: bool
-    approval_status: Literal["approved", "revise"]
+    approval_status: Literal["approved", "revise", "max_revisions_reached"]
     failing_checks: list[str] = Field(default_factory=list)
     target_agent: Literal["pain_point_miner", "idea_generator", "pitch_writer"]
     revision_feedback: str = Field(..., min_length=10)
@@ -384,6 +467,7 @@ class VentureForgeState(BaseModel):
     revision_counts: dict[str, int] = Field(default_factory=dict)
     revision_feedback: str | None = None
     current_revision_idea_id: UUID | None = None  # Track which idea is being revised
+    current_critique_index: int = Field(default=0, ge=0)  # Track which brief is being critiqued
     pain_point_miner_revision_count: int = Field(default=0, ge=0)  # Track pain_point_miner revisions separately
     
     # -----------------------------------------------------------------
@@ -391,6 +475,12 @@ class VentureForgeState(BaseModel):
     # -----------------------------------------------------------------
     idea_generation_attempts: int = Field(default=0, ge=0)
     """Total LLM invocations by idea_generator (validation retries + revisions)."""
+    
+    pitch_writer_attempts: int = Field(default=0, ge=0)
+    """Total LLM invocations by pitch_writer (prevents infinite loops when JSON parsing fails)."""
+    
+    scorer_attempts: int = Field(default=0, ge=0)
+    """Total LLM invocations by scorer (prevents infinite loops when JSON parsing fails)."""
     
     max_idea_generation_attempts: int = Field(default=10, ge=1)
     """Max validation retries per idea_generator run (when LLM produces invalid ideas)."""
@@ -655,16 +745,18 @@ class VentureForgeState(BaseModel):
         }
         
         if target == "pain_point_miner":
-            # Pain point revisions require full regeneration since pain points
-            # are shared across all ideas. We keep the idea_id for context.
-            # Clear revision_counts since all ideas will get new UUIDs.
+            # Pain point revisions are expensive - they require full regeneration.
+            # Instead of clearing everything, we'll keep existing pain points and
+            # let pain_point_miner ADD new ones (append mode).
+            # Ideas/scores/briefs stay intact unless they reference deleted pain points.
+            # This preserves good work while addressing the critic's feedback.
+            # 
+            # NOTE: If you need full regeneration (e.g., domain pivot), use a new run.
             updates.update({
-                "pain_points": [],
-                "ideas": [],
-                "scored_ideas": [],
-                "pitch_briefs": [],
                 "critique": None,
-                "revision_counts": {},  # Clear since ideas will have new UUIDs
+                # Don't clear pain_points - let pain_point_miner append
+                # Don't clear ideas/scored_ideas/pitch_briefs - preserve good work
+                # The critic's feedback will guide pain_point_miner to add better sources
             })
         elif target == "idea_generator":
             # Remove only the specific idea and its downstream artifacts

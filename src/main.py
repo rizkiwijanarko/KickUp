@@ -119,18 +119,24 @@ def main() -> None:
         result = run_pipeline(args.domain, args.max_pain_points)
 
     # Serialize final state
-    output = result.model_dump(mode="json", exclude_none=True)
+    # LangGraph returns a dict, not a Pydantic model
+    if isinstance(result, dict):
+        output = result
+    else:
+        output = result.model_dump(mode="json", exclude_none=True)
+    
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
-    print(f"\nPipeline finished in stage: {result.current_stage}")
-    print(f"   Run ID     : {result.run_id}")
-    print(f"   Duration   : {result.agent_timings}")
-    print(f"   Pain points: {len(result.pain_points)}")
-    print(f"   Ideas      : {len(result.ideas)}")
-    print(f"   Pitches    : {len(result.pitch_briefs)}")
-    total_revisions = sum(result.revision_counts.values())
-    print(f"   Revisions  : {total_revisions} (across {len(result.revision_counts)} pitches)")
+    print(f"\nPipeline finished in stage: {output.get('current_stage', 'unknown')}")
+    print(f"   Run ID     : {output.get('run_id', 'unknown')}")
+    print(f"   Duration   : {output.get('agent_timings', {})}")
+    print(f"   Pain points: {len(output.get('pain_points', []))}")
+    print(f"   Ideas      : {len(output.get('ideas', []))}")
+    print(f"   Pitches    : {len(output.get('pitch_briefs', []))}")
+    revision_counts = output.get('revision_counts', {})
+    total_revisions = sum(revision_counts.values())
+    print(f"   Revisions  : {total_revisions} (across {len(revision_counts)} pitches)")
     print(f"\nOutput written to: {args.output}")
 
 

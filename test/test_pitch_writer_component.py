@@ -106,6 +106,22 @@ def _make_pitch_brief_response(idea_id: Any) -> dict:
         "solution": "A visual editor and debugger for Docker Compose files.",
         "target_user": "Solo developers and small teams",
         "market_opportunity": "Large developer tools market with growing Docker adoption.",
+        "competitive_landscape": {
+            "current_behavior": "Developers manually edit YAML files and debug via trial-and-error restarts",
+            "direct_competitors": "Docker Desktop, VS Code extensions, and manual YAML editing",
+            "real_enemy": "The habit of editing raw YAML without validation or visual feedback"
+        },
+        "differentiation": "Visual editor with real-time validation vs manual YAML editing",
+        "validation_plan": {
+            "discovery_questions": [
+                "Walk me through the last time you debugged a Docker Compose issue",
+                "How much time do you spend on Docker Compose configuration weekly?",
+                "What frustrates you most about your current workflow?",
+                "What would make you switch from your current approach?",
+                "How do you currently validate your Docker Compose files?"
+            ],
+            "validation_criteria": "At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
+        },
         "business_model": "Monthly SaaS subscription model with freemium tier included.",
         "go_to_market": "Post on Reddit and Hacker News for early adopters.",
         "key_risk": "Incumbents may copy the feature quickly.",
@@ -249,6 +265,15 @@ def test_live_llm_produces_valid_briefs() -> None:
         assert len(b.business_model) > 0
         assert len(b.go_to_market) > 0
         assert len(b.markdown_content) >= 100
+        # Phase 2: Check new fields
+        assert b.competitive_landscape is not None
+        assert len(b.competitive_landscape.current_behavior) > 0
+        assert len(b.competitive_landscape.direct_competitors) > 0
+        assert len(b.competitive_landscape.real_enemy) > 0
+        assert len(b.differentiation) > 0
+        assert b.validation_plan is not None
+        assert len(b.validation_plan.discovery_questions) == 5
+        assert len(b.validation_plan.validation_criteria) > 0
     print("  PASS")
 
 

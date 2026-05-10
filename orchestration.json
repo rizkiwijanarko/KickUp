@@ -2,7 +2,7 @@
   "system": {
     "name": "VentureForge",
     "version": "2.0.0",
-    "description": "A hierarchical multi-agent system with reflection loop that mines pain points from multiple community sources (Hacker News, Product Hunt, Tavily web search, Reddit), clusters similar complaints with LLM-based grouping (1-10 evidence sources per pain point), generates startup ideas, and produces pitch briefs. Uses binary yes/no rubrics for subjective evaluation. Runs on AMD MI300X via vLLM.",
+    "description": "A hierarchical multi-agent system with reflection loop that scrapes ALL community sources in parallel (Hacker News, Product Hunt, Tavily web search, YouTube), combines results to maximize pain point discovery, clusters similar complaints with LLM-based grouping (1-10 evidence sources per pain point), generates startup ideas, and produces pitch briefs. Uses binary yes/no rubrics for subjective evaluation. Runs on AMD MI300X via vLLM.",
     "framework": "LangGraph",
     "patterns": ["hierarchical", "reflection", "clustering"],
     "execution_model": "supervisor_with_workers_and_critic_loop",
@@ -31,7 +31,7 @@
       "id": "pain_point_miner",
       "role": "worker",
       "name": "Pain Point Miner",
-      "description": "Scrapes multiple community sources (Hacker News, Product Hunt, Tavily web search, Reddit) for genuine user complaints in the target domain. Uses LLM to cluster similar complaints into pain points, each with 1-10 evidence sources (verbatim quotes + URLs). Can be re-invoked by reflection loop if critic finds weak evidence.",
+      "description": "Scrapes ALL community sources in parallel (Hacker News, Product Hunt, Tavily web search, YouTube) for genuine user complaints in the target domain. Combines results from all sources to maximize pain point discovery. Uses LLM to cluster similar complaints into pain points, each with 1-10 evidence sources (verbatim quotes + URLs). Can be re-invoked by reflection loop if critic finds weak evidence.",
       "model": "llama-3.3-70b-instruct",
       "temperature": 0.2,
       "input": {
@@ -80,10 +80,10 @@
           "entrypoint": "search_communities"
         },
         {
-          "name": "reddit_json_scraper",
-          "module": "src.tools.reddit_scraper",
-          "entrypoints": ["scrape_for_domain", "scrape_subreddit"],
-          "notes": "Requires Reddit API approval (not currently active)"
+          "name": "youtube_scraper",
+          "module": "src.tools.youtube_scraper",
+          "entrypoint": "scrape_for_domain",
+          "notes": "Free quota: 10,000 units/day. Filters for videos with comments enabled. Provides broad market coverage beyond tech communities."
         }
       ],
       "rubric_purpose": "Filter out fabricated or weak pain points before downstream agents see them",

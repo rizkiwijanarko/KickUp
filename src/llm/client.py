@@ -77,12 +77,10 @@ def get_llm(
             qwen_params = {
                 "temperature": 0.6,
                 "top_p": 0.95,
-                "model_kwargs": {
-                    "extra_body": {
-                        "top_k": 20,
-                        "repetition_penalty": 1.0,
-                        "presence_penalty": 0.0,
-                    },
+                "extra_body": {
+                    "top_k": 20,
+                    "repetition_penalty": 1.0,
+                    "presence_penalty": 0.0,
                 },
             }
         else:
@@ -91,13 +89,11 @@ def get_llm(
             qwen_params = {
                 "temperature": 1.0,
                 "top_p": 0.95,
-                "model_kwargs": {
-                    "extra_body": {
-                        "top_k": 20,
-                        "repetition_penalty": 1.0,
-                        "presence_penalty": 1.5,
-                        "chat_template_kwargs": {"enable_thinking": False},
-                    },
+                "extra_body": {
+                    "top_k": 20,
+                    "repetition_penalty": 1.0,
+                    "presence_penalty": 1.5,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             }
         

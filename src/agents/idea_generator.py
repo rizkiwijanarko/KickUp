@@ -91,24 +91,39 @@ def _build_user_prompt(state: VentureForgeState) -> str:
     # If only 1 pain point exists, require 1; otherwise require 2
     min_refs = min(2, len(pps))
     
+    # Build adaptive requirement block based on available pain points
+    if len(pps) == 1:
+        requirement_block = (
+            "**SPECIAL CASE: Only 1 pain point available.**\\n"
+            "Generate ideas that deeply address this single pain point. "
+            "Each idea must reference this pain point UUID in 'addresses_pain_point_ids'. "
+            "Focus on different solution angles, user segments, or implementation approaches for variety.\\n\\n"
+        )
+    elif len(pps) >= 2:
+        requirement_block = (
+            f"**CRITICAL REQUIREMENT: Each idea MUST reference AT LEAST {min_refs} pain point UUIDs in 'addresses_pain_point_ids'.**\\n"
+            f"Ideas with fewer than {min_refs} references will be REJECTED. "
+            "Cross-pollinate pain points to create stronger, more defensible ideas that solve multiple problems.\\n\\n"
+        )
+    else:
+        requirement_block = "ERROR: No pain points provided. Cannot generate ideas.\\n\\n"
+    
     user_text = (
-        f"Domain: {domain}\n"
-        f"Ideas to generate: {count}\n\n"
-        f"PAIN POINTS ({len(pps)} provided):\n"
-        f"{json.dumps(pp_blobs, indent=2)}\n\n"
+        f"Domain: {domain}\\n"
+        f"Ideas to generate: {count}\\n\\n"
+        f"PAIN POINTS ({len(pps)} provided):\\n"
+        f"{json.dumps(pp_blobs, indent=2)}\\n\\n"
         f"{revision_block}"
-        "Generate the exact number of ideas requested. \n\n"
-        f"**CRITICAL REQUIREMENT: Each idea MUST reference AT LEAST {min_refs} pain point UUID(s) in the 'addresses_pain_point_ids' array.** "
-        f"Ideas with fewer than {min_refs} pain point reference(s) will be rejected. "
-        "Only use UUIDs from the pain points list above — do not invent new UUIDs.\n\n"
-        "Return JSON: {\"ideas\": [ ... ]}."
+        f"{requirement_block}"
+        "Only use UUIDs from the pain points list above — do not invent new UUIDs.\\n\\n"
+        "Return JSON: {\\\"ideas\\\": [ ... ]}."
     )
     return user_text
 
 
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
     """Call LLM, parse JSON, return raw idea dicts."""
-    llm = get_llm(temperature=0.7, max_tokens=4096, reasoning=False)
+    llm = get_llm(temperature=0.7, max_tokens=16384, reasoning=False)
     
     # Add explicit JSON-only instruction
     system_prompt = _build_system_prompt()
