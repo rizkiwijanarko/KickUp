@@ -260,26 +260,37 @@ def orchestrator(state: VentureForgeState) -> dict:
             )
             return patch
         
-        # Check if all top ideas are "park" verdict (not worth pursuing)
-        if state.top_scored_ideas and all(s.verdict == "park" for s in state.top_scored_ideas):
-            error_msg = (
-                f"All {len(state.top_scored_ideas)} top-scored ideas received 'park' verdict "
-                f"(not worth pursuing due to fatal flaws or low scores). "
-                f"Cannot generate pitch briefs for ideas that should be parked. "
-                f"Consider: (1) adjusting domain to find better pain points, "
-                f"(2) increasing ideas_per_run to generate more candidates, or "
-                f"(3) reviewing scorer rubric if verdicts seem too harsh."
+        # Log verdict distribution for visibility
+        if state.top_scored_ideas:
+            verdict_counts = {
+                "pursue": sum(1 for s in state.top_scored_ideas if s.verdict == "pursue"),
+                "explore": sum(1 for s in state.top_scored_ideas if s.verdict == "explore"),
+                "park": sum(1 for s in state.top_scored_ideas if s.verdict == "park"),
+            }
+            logger.info(
+                f"[orchestrator] Top {len(state.top_scored_ideas)} ideas verdict distribution: "
+                f"pursue={verdict_counts['pursue']}, explore={verdict_counts['explore']}, park={verdict_counts['park']}"
             )
-            patch = state.mark_failed(error_msg)
-            patch.update(
-                state.add_event(
-                    agent="orchestrator",
-                    stage=PipelineStage.FAILED,
-                    kind="error",
-                    message=error_msg,
+            
+            # If all ideas are "park", log a warning but continue to generate pitch briefs
+            # "Park" means "interesting but has concerns" - still worth documenting
+            if all(s.verdict == "park" for s in state.top_scored_ideas):
+                patch = {}
+                patch.update(
+                    state.add_event(
+                        agent="orchestrator",
+                        stage=PipelineStage.WRITING,
+                        kind="warning",
+                        message=(
+                            f"All {len(state.top_scored_ideas)} top-scored ideas received 'park' verdict "
+                            f"(interesting but has concerns). Generating pitch briefs for documentation. "
+                            f"Consider: (1) adjusting domain for better pain points, "
+                            f"(2) increasing ideas_per_run for more candidates, or "
+                            f"(3) reviewing scorer rubric if verdicts seem too harsh."
+                        ),
+                    )
                 )
-            )
-            return patch
+                # Don't return here - continue to pitch_writer
         
         # Circuit breaker: prevent infinite loops when pitch_writer fails to generate briefs
         if state.pitch_writer_attempts >= state.max_total_llm_calls_per_agent:
@@ -403,6 +414,53 @@ def orchestrator(state: VentureForgeState) -> dict:
             )
         )
         return patch
+    
+    # ✅ POST-REVISION PIPELINE COMPLETION CHECK
+    # After a revision, we may have new ideas that need scoring/pitching before returning to Critic
+    
+    # Check for unscored ideas (after idea_generator revision)
+    scored_idea_ids = {s.idea_id for s in state.scored_ideas}
+    unscored_ideas = [idea for idea in state.ideas if idea.id not in scored_idea_ids]
+    
+    if unscored_ideas:
+        logger.info(
+            f"[orchestrator] Found {len(unscored_ideas)} unscored ideas after revision. "
+            f"Routing to scorer before returning to critic."
+        )
+        patch = {"current_stage": PipelineStage.SCORING, "next_node": "scorer"}
+        patch.update(
+            state.add_event(
+                agent="orchestrator",
+                stage=PipelineStage.SCORING,
+                kind="info",
+                message=f"Found {len(unscored_ideas)} unscored ideas after revision. Routing to scorer.",
+            )
+        )
+        return patch
+    
+    # Check for unpitched scored ideas (after scorer revision or idea_generator → scorer)
+    if state.top_scored_ideas:
+        top_ids = {s.idea_id for s in state.top_scored_ideas}
+        brief_ids = {b.idea_id for b in state.pitch_briefs}
+        missing_brief_ids = top_ids - brief_ids
+        
+        if missing_brief_ids:
+            logger.info(
+                f"[orchestrator] Found {len(missing_brief_ids)} ideas without pitch briefs after revision. "
+                f"Routing to pitch_writer before returning to critic."
+            )
+            patch = {"current_stage": PipelineStage.WRITING, "next_node": "pitch_writer"}
+            patch.update(
+                state.add_event(
+                    agent="orchestrator",
+                    stage=PipelineStage.WRITING,
+                    kind="info",
+                    message=f"Found {len(missing_brief_ids)} ideas without pitch briefs after revision. Routing to pitch_writer.",
+                )
+            )
+            return patch
+    
+    # All ideas are scored and pitched - continue with critique workflow
     
     # --- Critique passed or max revisions reached ---
     # Check if there are more briefs to critique

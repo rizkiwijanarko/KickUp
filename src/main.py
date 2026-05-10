@@ -119,9 +119,19 @@ def main() -> None:
         result = run_pipeline(args.domain, args.max_pain_points)
 
     # Serialize final state
-    # LangGraph returns a dict, not a Pydantic model
+    # LangGraph returns a dict that may contain Pydantic models
+    # We need to serialize them properly to avoid "Object of type X is not JSON serializable" errors
     if isinstance(result, dict):
-        output = result
+        # Convert dict to VentureForgeState to ensure proper serialization
+        from src.state.schema import VentureForgeState
+        try:
+            state = VentureForgeState(**result)
+            output = state.model_dump(mode="json", exclude_none=True)
+        except Exception as e:
+            # Fallback: try direct serialization (may fail if dict contains Pydantic models)
+            print(f"Warning: Could not convert result to VentureForgeState: {e}")
+            print("Attempting direct serialization...")
+            output = result
     else:
         output = result.model_dump(mode="json", exclude_none=True)
     

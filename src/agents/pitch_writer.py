@@ -21,7 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 def _build_system_prompt() -> str:
-    return get_prompt("pitch_writer")
+    """Load compressed pitch writer prompt to reduce token usage."""
+    from pathlib import Path
+    
+    compressed_path = Path(__file__).parent.parent.parent / "agent_prompts" / "pitch_writer_prompt_compressed.txt"
+    
+    if compressed_path.exists():
+        with open(compressed_path, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        logger.warning("[pitch_writer] Compressed prompt not found, using original")
+        return get_prompt("pitch_writer")
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
@@ -124,6 +134,147 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         "Write full pitch briefs for these ideas. Return a JSON array of pitch briefs."
     )
     return user_text
+
+
+def _build_user_prompt_single(state: VentureForgeState, scored_idea) -> str:
+    """Build prompt for a SINGLE idea to enhance focus and reduce tokens.
+    
+    Generates one brief at a time for:
+    - Better fit within vLLM 2048 token limit
+    - More comprehensive, detailed briefs  
+    - LLM can focus deeply on each idea
+    """
+    ideas_map = {str(idea.id): idea for idea in state.ideas}
+    idea = ideas_map.get(str(scored_idea.idea_id))
+    
+    if not idea:
+        logger.warning(f"[pitch_writer] Could not find idea {scored_idea.idea_id}")
+        return ""
+    
+    # Build scored idea blob for this single idea
+    scored_blob = {
+        "idea_id": str(scored_idea.idea_id),
+        "title": idea.title,
+        "one_liner": idea.one_liner,
+        "problem": idea.problem,
+        "solution": idea.solution,
+        "target_user": idea.target_user,
+        "key_features": idea.key_features,
+        "yes_count": scored_idea.yes_count,
+        "core_assumption": scored_idea.core_assumption,
+        "fatal_flaws": [f.model_dump() for f in scored_idea.fatal_flaws],
+        "one_risk": scored_idea.one_risk,
+    }
+    
+    # Filter pain points to only those addressed by THIS idea
+    relevant_pp_ids = set(idea.addresses_pain_point_ids)
+    relevant_pps = [
+        pp for pp in state.filtered_pain_points
+        if pp.id in relevant_pp_ids
+    ]
+    
+    # Sort by evidence count
+    sorted_pps = sorted(relevant_pps, key=lambda pp: len(pp.evidence), reverse=True)
+    
+    # Limit evidence items per pain point to top 2
+    pp_blobs = [
+        {
+            "id": str(pp.id),
+            "title": pp.title,
+            "description": pp.description,
+            "evidence": [
+                {
+                    "source_url": ev.source_url,
+                    "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
+                    "source": ev.source.value,
+                }
+                for ev in pp.evidence[:2]  # Only top 2 evidence items
+            ],
+            "evidence_count": len(pp.evidence),
+        }
+        for pp in sorted_pps[:4]  # Max 4 pain points
+    ]
+    
+    feedback = state.revision_feedback or "None"
+    
+    # Revision block if applicable
+    revision_block = ""
+    if state.revision_feedback:
+        last_crit = state.critiques[-1] if state.critiques else None
+        failing = ", ".join(last_crit.failing_checks) if last_crit else "(see feedback)"
+        revision_block = (
+            "THIS IS A REVISION ROUND. The critic flagged issues. You MUST fix:\n"
+            f"- Failing checks: {failing}\n"
+            f"- Feedback: {feedback}\n\n"
+            "Do NOT change the idea, evidence_links, or core assumptions. "
+            "Only rewrite pitch fields to satisfy the rubric.\n\n"
+        )
+    
+    user_text = (
+        f"Domain: {state.domain}\n\n"
+        f"SCORED IDEA:\n{json.dumps(scored_blob, indent=2)}\n\n"
+        f"SUPPORTING PAIN POINTS:\n{json.dumps(pp_blobs, indent=2)}\n\n"
+        f"{revision_block}"
+        "Write a full pitch brief for this idea. Return a single JSON object (not an array)."
+    )
+    return user_text
+
+
+def _invoke_llm_single(state: VentureForgeState, scored_idea, retry_count: int = 0) -> dict | None:
+    """Invoke LLM to generate a SINGLE pitch brief.
+    
+    Args:
+        state: Current pipeline state
+        scored_idea: The scored idea to write a brief for
+        retry_count: Current retry attempt (0-indexed)
+    
+    Returns:
+        Raw pitch brief dict, or None on failure
+    """
+    llm = get_llm(temperature=0.6, max_tokens=16384, reasoning=False)
+    
+    system_prompt = _build_system_prompt()
+    system_prompt += "\n\n**CRITICAL: Output ONLY a single JSON object. No markdown fences, no explanations. Start with { and end with }.**"
+    
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=_build_user_prompt_single(state, scored_idea)),
+    ]
+    
+    start = time.monotonic()
+    try:
+        raw = llm.invoke(messages)
+        content = raw.content if hasattr(raw, "content") else str(raw)
+    except Exception as e:
+        logger.error(f"[pitch_writer] LLM invocation failed for idea {scored_idea.idea_id} (attempt {retry_count + 1}): {e}")
+        return None
+    
+    elapsed = time.monotonic() - start
+    logger.info(f"[pitch_writer] LLM responded in {elapsed:.1f}s for idea {scored_idea.idea_id} (attempt {retry_count + 1})")
+    
+    # Warn if response looks truncated
+    if content and not content.rstrip().endswith('}'):
+        logger.warning(
+            f"[pitch_writer] Response may be truncated for idea {scored_idea.idea_id}. "
+            f"Last 100 chars: {content[-100:]}"
+        )
+    
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error(
+            f"[pitch_writer] JSON extraction failed for idea {scored_idea.idea_id} (attempt {retry_count + 1}). "
+            f"Response length: {len(content)} chars"
+        )
+        logger.error(f"[pitch_writer] Response preview: {content[:500]}")
+        return None
+    
+    # Handle both dict and wrapped dict formats
+    if isinstance(parsed, dict):
+        if "pitch_briefs" in parsed and isinstance(parsed["pitch_briefs"], list):
+            return parsed["pitch_briefs"][0] if parsed["pitch_briefs"] else None
+        return parsed
+    
+    return None
 
 
 def _invoke_llm(state: VentureForgeState, retry_count: int = 0) -> list[dict]:
@@ -255,61 +406,77 @@ def run(state: VentureForgeState) -> dict:
         )
         return patch
 
-    # Retry logic: attempt up to 3 times if LLM fails
+    # ONE-BRIEF-AT-A-TIME GENERATION
+    # Generate briefs one at a time for better token efficiency and comprehensiveness
     MAX_RETRIES = 3
-    raw_briefs = []
     
-    for retry in range(MAX_RETRIES):
-        raw_briefs = _invoke_llm(state, retry_count=retry)
-        
-        if raw_briefs:
-            # Success - got valid briefs
-            logger.info(f"[pitch_writer] Successfully generated {len(raw_briefs)} briefs on attempt {retry + 1}")
-            break
-        
-        if retry < MAX_RETRIES - 1:
-            logger.warning(
-                f"[pitch_writer] Attempt {retry + 1}/{MAX_RETRIES} failed to generate briefs. "
-                f"Retrying..."
-            )
-        else:
-            logger.error(
-                f"[pitch_writer] All {MAX_RETRIES} attempts failed to generate briefs. "
-                f"Falling back to keeping existing briefs."
-            )
-    
-    # Fallback: if in revision mode and all retries failed, keep the old brief
-    if not raw_briefs and state.current_revision_idea_id:
-        logger.warning(
-            f"[pitch_writer] Revision failed for idea {state.current_revision_idea_id}. "
-            f"Keeping existing brief and marking revision as failed."
-        )
-        
-        # Find the existing brief for this idea
-        existing_brief = next(
-            (b for b in state.pitch_briefs if b.idea_id == state.current_revision_idea_id),
+    # Determine which ideas to write briefs for
+    if state.current_revision_idea_id:
+        # Revision mode: only write brief for the specific idea being revised
+        target_scored = next(
+            (s for s in state.scored_ideas if s.idea_id == state.current_revision_idea_id),
             None
         )
-        
-        if existing_brief:
-            patch = {
-                "pitch_briefs": state.pitch_briefs,  # Keep all existing briefs
-                "current_revision_idea_id": None,
-                "next_node": "orchestrator",
-                "pitch_writer_attempts": state.pitch_writer_attempts + 1,
-            }
-            patch.update(
-                state.add_event(
-                    agent="pitch_writer",
-                    stage=PipelineStage.WRITING,
-                    kind="error",
-                    message=f"Failed to revise pitch brief for idea {state.current_revision_idea_id} after {MAX_RETRIES} attempts. Keeping original brief.",
-                    idea_id=state.current_revision_idea_id,
-                )
-            )
-            return patch
+        ideas_to_write = [target_scored] if target_scored else []
+        logger.info(f"[pitch_writer] Revision mode: writing brief for idea {state.current_revision_idea_id}")
+    else:
+        # Initial generation: write briefs for all top scored ideas
+        ideas_to_write = state.top_scored_ideas
+        logger.info(f"[pitch_writer] Initial generation: writing {len(ideas_to_write)} briefs")
     
-    # If no briefs generated and not in revision mode, return empty
+    raw_briefs = []
+    
+    # Generate one brief at a time
+    for scored_idea in ideas_to_write:
+        logger.info(f"[pitch_writer] Generating brief for idea {scored_idea.idea_id}: {scored_idea.idea_id}")
+        
+        raw_brief = None
+        for retry in range(MAX_RETRIES):
+            raw_brief = _invoke_llm_single(state, scored_idea, retry_count=retry)
+            
+            if raw_brief:
+                logger.info(f"[pitch_writer] Successfully generated brief for idea {scored_idea.idea_id} on attempt {retry + 1}")
+                raw_briefs.append(raw_brief)
+                break
+            
+            if retry < MAX_RETRIES - 1:
+                logger.warning(
+                    f"[pitch_writer] Attempt {retry + 1}/{MAX_RETRIES} failed for idea {scored_idea.idea_id}. Retrying..."
+                )
+            else:
+                logger.error(
+                    f"[pitch_writer] All {MAX_RETRIES} attempts failed for idea {scored_idea.idea_id}."
+                )
+        
+        # If in revision mode and failed, keep the old brief
+        if not raw_brief and state.current_revision_idea_id:
+            logger.warning(
+                f"[pitch_writer] Revision failed for idea {state.current_revision_idea_id}. "
+                f"Keeping existing brief."
+            )
+            existing_brief = next(
+                (b for b in state.pitch_briefs if b.idea_id == state.current_revision_idea_id),
+                None
+            )
+            if existing_brief:
+                patch = {
+                    "pitch_briefs": state.pitch_briefs,
+                    "current_revision_idea_id": None,
+                    "next_node": "orchestrator",
+                    "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+                }
+                patch.update(
+                    state.add_event(
+                        agent="pitch_writer",
+                        stage=PipelineStage.WRITING,
+                        kind="error",
+                        message=f"Failed to revise pitch brief for idea {state.current_revision_idea_id} after {MAX_RETRIES} attempts. Keeping original brief.",
+                        idea_id=state.current_revision_idea_id,
+                    )
+                )
+                return patch
+    
+    # If no briefs generated at all
     if not raw_briefs:
         logger.error("[pitch_writer] Failed to generate any briefs after all retries")
         patch = {

@@ -772,9 +772,13 @@ class VentureForgeState(BaseModel):
         elif target == "pitch_writer":
             # Remove only the specific pitch brief
             filtered_briefs = [b for b in self.pitch_briefs if b.idea_id != idea_id]
+            
+            # Reset critique index to 0 so we re-review from the start
+            # This ensures the revised brief is reviewed in the correct order
             updates.update({
                 "pitch_briefs": filtered_briefs,
                 "critique": None,
+                "current_critique_index": 0,  # Reset to start
             })
         return updates
 

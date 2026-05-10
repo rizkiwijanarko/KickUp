@@ -85,14 +85,16 @@ def get_llm(
             }
         else:
             # General thinking tasks: temperature=1.0, top_p=0.95, presence_penalty=1.5
-            # For structured output (JSON), disable thinking mode
+            # For structured output (JSON), disable thinking mode and presence penalty
+            # ✅ FIX: presence_penalty=0.0 prevents skipping repeated tokens (quotes, commas)
+            # High presence_penalty (1.5) was causing LLM to omit opening quotes in JSON strings
             qwen_params = {
                 "temperature": 1.0,
                 "top_p": 0.95,
                 "extra_body": {
                     "top_k": 20,
                     "repetition_penalty": 1.0,
-                    "presence_penalty": 1.5,
+                    "presence_penalty": 0.0,  # Changed from 1.5 - critical for JSON output!
                     "chat_template_kwargs": {"enable_thinking": False},
                 },
             }

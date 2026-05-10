@@ -33,13 +33,17 @@ def route_after_orchestrator(state: VentureForgeState) -> str:
 
 def route_after_critic(state: VentureForgeState) -> str:
     """
-    After critic, either loop back via orchestrator (revision)
-    or go to END if approved / max revisions reached.
+    After critic, always return to orchestrator for routing decisions.
+    
+    The orchestrator is the single source of truth for:
+    - Moving to next brief
+    - Marking pipeline as completed
+    - Handling revision loops
+    
+    This prevents the critic from bypassing orchestrator logic and ending
+    the pipeline prematurely (e.g., after first brief approval).
     """
-    if state.critique and not state.critique.all_pass:
-        if state.can_revise:
-            return "orchestrator"  # reflection loop
-    return END
+    return "orchestrator"
 
 
 def build_graph() -> StateGraph:

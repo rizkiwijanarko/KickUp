@@ -28,6 +28,16 @@ def _build_system_prompt() -> str:
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
+    # If in revision mode, only score the specific idea being revised
+    if state.current_revision_idea_id:
+        ideas_to_score = [idea for idea in state.ideas if idea.id == state.current_revision_idea_id]
+        if not ideas_to_score:
+            # Idea was removed, return empty prompt
+            return "No ideas to score."
+    else:
+        # Initial scoring: score all ideas
+        ideas_to_score = state.ideas
+    
     ideas_blobs = [
         {
             "id": str(idea.id),
@@ -37,7 +47,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
             "solution": idea.solution,
             "target_user": idea.target_user,
         }
-        for idea in state.ideas
+        for idea in ideas_to_score
     ]
     
     # Sort pain points by evidence count (descending) to prioritize well-validated pain points
@@ -161,14 +171,34 @@ def run(state: VentureForgeState) -> dict:
     for i, s in enumerate(scored_ideas):
         s.rank = i + 1
 
+    # Merge with existing scores if in revision mode
+    if state.current_revision_idea_id:
+        # Remove old score for the revised idea
+        existing_scores = [s for s in state.scored_ideas if s.idea_id != state.current_revision_idea_id]
+        # Add new score
+        all_scores = existing_scores + scored_ideas
+        # Re-rank all scores
+        all_scores.sort(key=lambda s: s.yes_count, reverse=True)
+        for i, s in enumerate(all_scores):
+            s.rank = i + 1
+        
+        logger.info(
+            f"[scorer] Revision mode: re-scored idea {state.current_revision_idea_id}. "
+            f"Total scores: {len(all_scores)}"
+        )
+    else:
+        # Initial scoring: use new scores
+        all_scores = scored_ideas
+
     # Verdict counts for logging
-    pursue = sum(1 for s in scored_ideas if s.verdict == "pursue")
-    explore = sum(1 for s in scored_ideas if s.verdict == "explore")
-    park = sum(1 for s in scored_ideas if s.verdict == "park")
+    pursue = sum(1 for s in all_scores if s.verdict == "pursue")
+    explore = sum(1 for s in all_scores if s.verdict == "explore")
+    park = sum(1 for s in all_scores if s.verdict == "park")
 
     patch = {
-        "scored_ideas": scored_ideas,
+        "scored_ideas": all_scores,
         "scorer_attempts": state.scorer_attempts + 1,
+        "current_revision_idea_id": None,  # Clear revision flag
         "next_node": "orchestrator",
     }
     patch.update(

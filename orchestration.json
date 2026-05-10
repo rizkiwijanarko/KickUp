@@ -93,9 +93,20 @@
       "id": "idea_generator",
       "role": "worker",
       "name": "Idea Generator",
-      "description": "Groups pain points into themes and generates distinct startup ideas. Each idea must address at least 2 pain points. Can be re-invoked by reflection loop if critic finds ideas weak.",
-      "model": "llama-3.3-70b-instruct",
+      "description": "Groups pain points into themes and generates distinct startup ideas ONE AT A TIME to fit within vLLM 2048 token limit. Each idea must address at least 2 pain points. Can be re-invoked by reflection loop if critic finds ideas weak.",
+      "model": "qwen-3.6-35b-a3b",
       "temperature": 0.7,
+      "token_optimization": {
+        "strategy": "one_at_a_time_generation",
+        "rationale": "Generates 1 idea per LLM call instead of batch. Reduces output from 1,600 tokens (2 ideas) to 800 tokens (1 idea).",
+        "pain_point_filtering": "Sends top 5 pain points with top 2 evidence items each, quotes truncated to 300 chars. Reduces input by ~50%.",
+        "token_budget": {
+          "input": 1200,
+          "output": 800,
+          "total": 2000,
+          "status": "fits_within_2048_limit"
+        }
+      },
       "input": {
         "pain_points": "array (filtered, passes_rubric=true only)",
         "domain": "string",
@@ -166,9 +177,21 @@
       "id": "pitch_writer",
       "role": "worker",
       "name": "Pitch Writer",
-      "description": "Writes investor-ready one-page pitch briefs in markdown for the top N ideas. Can be re-invoked by reflection loop if critic flags hallucinations or tone issues.",
-      "model": "llama-3.3-70b-instruct",
+      "description": "Writes investor-ready one-page pitch briefs in markdown for the top N ideas ONE AT A TIME to fit within vLLM 2048 token limit. Uses compressed system prompt (502 words) and filtered pain points. Can be re-invoked by reflection loop if critic flags hallucinations or tone issues.",
+      "model": "qwen-3.6-35b-a3b",
       "temperature": 0.5,
+      "token_optimization": {
+        "strategy": "one_at_a_time_generation",
+        "rationale": "Generates 1 brief per LLM call instead of batch. Reduces output from 4,000 tokens (2 briefs) to 2,000 tokens (1 brief).",
+        "compressed_prompt": "Uses agent_prompts/pitch_writer_prompt_compressed.txt (502 words, down from 1,123 words). Saves ~800 input tokens while preserving Paul Graham framework.",
+        "pain_point_filtering": "Only sends pain points addressed by the specific idea (2-3 instead of 5). Limits to top 2 evidence items per pain point.",
+        "token_budget": {
+          "input": 1000,
+          "output": 2000,
+          "total": 3000,
+          "status": "over_2048_but_works_reliably"
+        }
+      },
       "input": {
         "scored_ideas": "array (top N, sorted by yes_count desc)",
         "pain_points": "array (for evidence URLs)",
@@ -273,8 +296,10 @@
     "llm_serving": {
       "dev": "OpenAI / OpenRouter (any OpenAI-compatible API)",
       "production": "vLLM on AMD Instinct MI300X via ROCm",
-      "model": "meta-llama/Llama-3.3-70B-Instruct",
-      "switching_mechanism": "Single LLM_BASE_URL env var swap"
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "token_limit": "~2048 tokens output (vLLM server configuration)",
+      "switching_mechanism": "Single LLM_BASE_URL env var swap",
+      "optimization_note": "idea_generator and pitch_writer use one-at-a-time generation to fit within 2048 token limit"
     },
     "framework": "LangGraph",
     "state_persistence": "SQLite (LangGraph checkpointer stored under .cache/langgraph.sqlite)",

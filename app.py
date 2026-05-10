@@ -6,6 +6,7 @@ Web interface for the autonomous multi-agent startup discovery system.
 
 import json
 import time
+from pathlib import Path
 from typing import Literal
 
 import gradio as gr
@@ -43,6 +44,84 @@ DOMAIN_RECOMMENDATIONS = [
     "content creation",
 ]
 
+# Track previous stage for notifications
+_previous_stage = {}
+
+
+# =============================================================================
+# DOWNLOAD UTILITIES
+# =============================================================================
+
+
+def download_pain_points(state) -> str:
+    """Generate downloadable markdown file for pain points."""
+    if not state or not state.pain_points:
+        return None
+    
+    content = f"# Pain Points - {state.domain}\n\n"
+    content += f"**Run ID:** {state.run_id}\n"
+    content += f"**Total Pain Points:** {len(state.pain_points)}\n"
+    content += f"**Passed Rubric:** {len(state.filtered_pain_points)}\n\n"
+    content += "---\n\n"
+    content += format_pain_points(state)
+    
+    # Save to temp file
+    output_path = Path(settings.cache_dir) / f"pain_points_{state.run_id}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+    return str(output_path)
+
+
+def download_ideas(state) -> str:
+    """Generate downloadable markdown file for ideas."""
+    if not state or not state.ideas:
+        return None
+    
+    content = f"# Startup Ideas - {state.domain}\n\n"
+    content += f"**Run ID:** {state.run_id}\n"
+    content += f"**Total Ideas:** {len(state.ideas)}\n\n"
+    content += "---\n\n"
+    content += format_ideas(state)
+    
+    output_path = Path(settings.cache_dir) / f"ideas_{state.run_id}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+    return str(output_path)
+
+
+def download_scored_ideas(state) -> str:
+    """Generate downloadable markdown file for scored ideas."""
+    if not state or not state.scored_ideas:
+        return None
+    
+    content = f"# Scored Ideas - {state.domain}\n\n"
+    content += f"**Run ID:** {state.run_id}\n"
+    content += f"**Total Scored Ideas:** {len(state.scored_ideas)}\n\n"
+    content += "---\n\n"
+    content += format_scored_ideas(state)
+    
+    output_path = Path(settings.cache_dir) / f"scored_ideas_{state.run_id}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+    return str(output_path)
+
+
+def download_pitches(state) -> str:
+    """Generate downloadable markdown file for pitch briefs."""
+    if not state or not state.pitch_briefs:
+        return None
+    
+    content = f"# Pitch Briefs - {state.domain}\n\n"
+    content += f"**Run ID:** {state.run_id}\n"
+    content += f"**Total Pitches:** {len(state.pitch_briefs)}\n\n"
+    content += "---\n\n"
+    content += format_pitches(state)
+    
+    output_path = Path(settings.cache_dir) / f"pitches_{state.run_id}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+    return str(output_path)
+
 
 # =============================================================================
 # FORMATTING UTILITIES
@@ -50,9 +129,9 @@ DOMAIN_RECOMMENDATIONS = [
 
 
 def format_state_summary(state) -> str:
-    """Format a summary of the current pipeline state."""
+    """Format a summary of the current pipeline state with visual progress."""
     if state is None:
-        return "No active run"
+        return "No active run. Click **Start Discovery** to begin."
 
     status_emoji = {
         PipelineStage.IDLE: "💤",
@@ -68,14 +147,65 @@ def format_state_summary(state) -> str:
     }
 
     emoji = status_emoji.get(state.current_stage, "❓")
+    
+    # Build visual pipeline progress
+    pipeline_stages = [
+        ("⛏️ Mining", PipelineStage.MINING, len(state.pain_points) > 0),
+        ("💡 Generating", PipelineStage.GENERATING, len(state.ideas) > 0),
+        ("📊 Scoring", PipelineStage.SCORING, len(state.scored_ideas) > 0),
+        ("✍️ Writing", PipelineStage.WRITING, len(state.pitch_briefs) > 0),
+        ("🔍 Critiquing", PipelineStage.CRITIQUING, len(state.critiques) > 0),
+    ]
+    
+    progress_bar = []
+    completed_count = 0
+    for label, stage, completed in pipeline_stages:
+        if state.current_stage == stage:
+            progress_bar.append(f"**🔄 {label}**")  # Current stage
+        elif completed:
+            progress_bar.append(f"✅ {label}")  # Completed
+            completed_count += 1
+        else:
+            progress_bar.append(f"⬜ {label}")  # Not started
+    
+    progress_line = " → ".join(progress_bar)
+    
+    # Calculate progress percentage
+    total_stages = len(pipeline_stages)
+    progress_pct = int((completed_count / total_stages) * 100)
+    
+    # Format agent timings
+    timing_lines = []
+    if state.agent_timings:
+        for agent, duration in state.agent_timings.items():
+            timing_lines.append(f"  - {agent}: {duration:.1f}s")
+    timing_str = "\n".join(timing_lines) if timing_lines else "  No timings yet"
+    
+    # Recent events (last 3)
+    event_lines = []
+    if state.events:
+        for event in state.events[-3:]:
+            event_emoji = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}.get(event.kind, "📝")
+            event_lines.append(f"  {event_emoji} **{event.agent}**: {event.message}")
+    event_str = "\n".join(event_lines) if event_lines else "  No events yet"
+    
     return (
-        f"{emoji} **Stage:** {state.current_stage}\n"
-        f"🆔 **Run ID:** {state.run_id}\n"
-        f"📌 **Domain:** {state.domain}\n"
-        f"⏱️ **Duration:** {state.agent_timings}\n"
-        f"😫 **Pain Points:** {len(state.pain_points)}\n"
-        f"💡 **Ideas:** {len(state.ideas)}\n"
-        f"📝 **Pitches:** {len(state.pitch_briefs)}\n"
+        f"## {emoji} Current Stage: {state.current_stage.value.upper()}\n\n"
+        f"### Pipeline Progress ({progress_pct}% complete)\n"
+        f"{progress_line}\n\n"
+        f"---\n\n"
+        f"**🆔 Run ID:** `{state.run_id}`\n"
+        f"**📌 Domain:** {state.domain}\n\n"
+        f"### Metrics\n"
+        f"- 😫 Pain Points: **{len(state.pain_points)}** (passed rubric: {len(state.filtered_pain_points)})\n"
+        f"- 💡 Ideas: **{len(state.ideas)}**\n"
+        f"- 📊 Scored Ideas: **{len(state.scored_ideas)}**\n"
+        f"- ✍️ Pitch Briefs: **{len(state.pitch_briefs)}**\n"
+        f"- 🔍 Critiques: **{len(state.critiques)}**\n\n"
+        f"### Agent Timings\n"
+        f"{timing_str}\n\n"
+        f"### Recent Events\n"
+        f"{event_str}\n"
     )
 
 
@@ -307,13 +437,13 @@ def start_pipeline(
         if state is None:
             return (
                 run_id,
-                "Starting...",
+                "🚀 Pipeline starting...",
                 "Initializing...",
                 "Initializing...",
                 "Initializing...",
                 "Initializing...",
                 "Initializing...",
-                "",
+                f"✅ Pipeline started successfully! Run ID: {run_id}",
             )
 
         return (
@@ -324,10 +454,10 @@ def start_pipeline(
             format_scored_ideas(state),
             format_pitches(state),
             format_critiques(state),
-            "",
+            f"✅ Pipeline started successfully! Run ID: {run_id}",
         )
     except Exception as e:
-        error_msg = f"Error starting pipeline: {str(e)}"
+        error_msg = f"❌ Error starting pipeline: {str(e)}"
         return (
             "",
             error_msg,
@@ -336,18 +466,41 @@ def start_pipeline(
             error_msg,
             error_msg,
             error_msg,
-            "",
+            error_msg,
         )
 
 
 def update_progress(run_id: str) -> tuple[str, str, str, str, str, str]:
-    """Poll for state updates and return new UI state."""
+    """Poll for state updates and return new UI state with notifications."""
+    global _previous_stage
+    
     if not run_id or not is_run_active():
         return gr.skip()
 
     state = poll_state(run_id)
     if state is None:
         return gr.skip()
+    
+    # Check for stage changes and send notifications
+    prev_stage = _previous_stage.get(run_id)
+    current_stage = state.current_stage
+    
+    if prev_stage != current_stage:
+        _previous_stage[run_id] = current_stage
+        
+        # Send notifications for important stage transitions
+        if current_stage == PipelineStage.COMPLETED:
+            gr.Info(f"✅ Pipeline completed! Generated {len(state.pitch_briefs)} pitch brief(s).")
+        elif current_stage == PipelineStage.FAILED:
+            gr.Warning(f"❌ Pipeline failed. Check the error log for details.")
+        elif current_stage == PipelineStage.CANCELLED:
+            gr.Info("🛑 Pipeline cancelled by user.")
+        elif current_stage == PipelineStage.GENERATING and len(state.pain_points) > 0:
+            gr.Info(f"⛏️ Mining complete! Found {len(state.pain_points)} pain points.")
+        elif current_stage == PipelineStage.SCORING and len(state.ideas) > 0:
+            gr.Info(f"💡 Generated {len(state.ideas)} startup ideas.")
+        elif current_stage == PipelineStage.WRITING and len(state.scored_ideas) > 0:
+            gr.Info(f"📊 Scored {len(state.scored_ideas)} ideas.")
 
     return (
         format_state_summary(state),
@@ -363,8 +516,8 @@ def stop_pipeline(run_id: str) -> str:
     """Request pipeline cancellation."""
     if run_id:
         request_cancel(run_id)
-        return "Stop requested. The pipeline will complete the current step and stop."
-    return "No active run to stop."
+        return "⏹️ Stop requested. The pipeline will complete the current step and stop gracefully."
+    return "ℹ️ No active run to stop."
 
 
 def clear_cache() -> str:
@@ -373,9 +526,8 @@ def clear_cache() -> str:
     from pathlib import Path
     
     # Check if any runs are active
-    from src.run_controller import _active_runs
-    if _active_runs:
-        return "❌ Cannot clear cache while runs are active. Stop all runs first."
+    if is_run_active():
+        return "❌ Cannot clear cache while a run is active. Please stop the run first."
     
     cache_dir = Path(settings.cache_dir)
     if cache_dir.exists():
@@ -384,7 +536,7 @@ def clear_cache() -> str:
             shutil.rmtree(cache_dir)
             # Recreate empty cache directory
             cache_dir.mkdir(parents=True, exist_ok=True)
-            return "✅ Cache cleared successfully. All previous run data has been deleted."
+            return "✅ Cache cleared successfully! All previous run data has been deleted."
         except PermissionError as e:
             return f"❌ Cache is locked (database in use). Stop the app and clear manually: rm -rf {cache_dir}"
         except Exception as e:
@@ -458,7 +610,7 @@ def create_ui() -> gr.Blocks:
                     step=1,
                     label="Max Revisions",
                 )
-
+        
         run_id_display = gr.Textbox(label="Run ID", interactive=False, visible=True)
 
         with gr.Tabs() as tabs:
@@ -466,16 +618,48 @@ def create_ui() -> gr.Blocks:
                 progress_display = gr.Markdown("No active run")
 
             with gr.TabItem("😫 Pain Points"):
-                pain_points_display = gr.Markdown("No pain points yet")
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        pain_points_display = gr.Markdown("No pain points yet")
+                    with gr.Column(scale=1):
+                        download_pain_points_btn = gr.DownloadButton(
+                            "📥 Download",
+                            variant="secondary",
+                            size="sm",
+                        )
 
             with gr.TabItem("💡 Ideas"):
-                ideas_display = gr.Markdown("No ideas yet")
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        ideas_display = gr.Markdown("No ideas yet")
+                    with gr.Column(scale=1):
+                        download_ideas_btn = gr.DownloadButton(
+                            "📥 Download",
+                            variant="secondary",
+                            size="sm",
+                        )
 
             with gr.TabItem("📈 Scored Ideas"):
-                scored_ideas_display = gr.Markdown("No scored ideas yet")
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        scored_ideas_display = gr.Markdown("No scored ideas yet")
+                    with gr.Column(scale=1):
+                        download_scored_btn = gr.DownloadButton(
+                            "📥 Download",
+                            variant="secondary",
+                            size="sm",
+                        )
 
             with gr.TabItem("📝 Pitches"):
-                pitches_display = gr.Markdown("No pitches yet")
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        pitches_display = gr.Markdown("No pitches yet")
+                    with gr.Column(scale=1):
+                        download_pitches_btn = gr.DownloadButton(
+                            "📥 Download",
+                            variant="secondary",
+                            size="sm",
+                        )
 
             with gr.TabItem("🔍 Critiques"):
                 critiques_display = gr.Markdown("No critiques yet")
@@ -487,7 +671,12 @@ def create_ui() -> gr.Blocks:
 
                 export_output = gr.Code(label="Exported Data", language="json", interactive=False)
 
-        status_message = gr.Textbox(label="Status", interactive=False, visible=True)
+        status_message = gr.Textbox(
+            label="Status", 
+            interactive=False, 
+            visible=True,
+            value="Ready to start. Select a domain and click 'Start Discovery'.",
+        )
 
         # Event handlers
         domain_recommendation.change(
@@ -548,6 +737,27 @@ def create_ui() -> gr.Blocks:
             fn=lambda rid: export_markdown(poll_state(rid)),
             inputs=[run_id_display],
             outputs=[export_output],
+        )
+        
+        # Download button handlers
+        download_pain_points_btn.click(
+            fn=lambda rid: download_pain_points(poll_state(rid)),
+            inputs=[run_id_display],
+        )
+        
+        download_ideas_btn.click(
+            fn=lambda rid: download_ideas(poll_state(rid)),
+            inputs=[run_id_display],
+        )
+        
+        download_scored_btn.click(
+            fn=lambda rid: download_scored_ideas(poll_state(rid)),
+            inputs=[run_id_display],
+        )
+        
+        download_pitches_btn.click(
+            fn=lambda rid: download_pitches(poll_state(rid)),
+            inputs=[run_id_display],
         )
 
     return app

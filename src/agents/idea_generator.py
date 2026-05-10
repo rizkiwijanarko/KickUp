@@ -121,6 +121,149 @@ def _build_user_prompt(state: VentureForgeState) -> str:
     return user_text
 
 
+def _build_user_prompt_single(state: VentureForgeState, idea_number: int, total_ideas: int) -> str:
+    """Build prompt for generating a SINGLE idea to reduce token usage.
+    
+    Generates one idea at a time for:
+    - Better fit within vLLM 2048 token limit
+    - More focused, comprehensive ideas
+    - LLM can concentrate on each idea individually
+    
+    Args:
+        state: Current pipeline state
+        idea_number: Which idea this is (1-indexed for display)
+        total_ideas: Total number of ideas to generate
+    """
+    # Sort pain points by evidence count
+    sorted_pps = sorted(
+        state.filtered_pain_points,
+        key=lambda pp: len(pp.evidence),
+        reverse=True
+    )
+    pps = sorted_pps[:_MAX_PAIN_POINTS_CONTEXT]
+    domain = state.domain
+    feedback = state.revision_feedback or "None"
+    
+    # Serialize pain points with evidence (limit to top 2 evidence items per pain point)
+    pp_blobs: list[dict] = [
+        {
+            "id": str(pp.id),
+            "title": pp.title,
+            "description": pp.description,
+            "evidence": [
+                {
+                    "source_url": ev.source_url,
+                    "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
+                    "source": ev.source.value,
+                }
+                for ev in pp.evidence[:2]  # Only top 2 evidence items
+            ],
+            "evidence_count": len(pp.evidence),
+        }
+        for pp in pps
+    ]
+    
+    # Revision block if applicable
+    revision_block = ""
+    if state.revision_feedback:
+        revision_block = (
+            "THIS IS A REVISION ROUND. The critic flagged weaknesses in positioning. "
+            "You MUST address the following feedback:\n"
+            f"- Critic feedback: {feedback}\n\n"
+            "Make the target_user a specific, named, reachable community (a 'contained fire') "
+            "and make the competition thesis explicit.\n\n"
+        )
+    
+    # Determine minimum pain point references
+    min_refs = min(2, len(pps))
+    
+    # Build requirement block
+    if len(pps) == 1:
+        requirement_block = (
+            "**SPECIAL CASE: Only 1 pain point available.**\n"
+            "Generate an idea that deeply addresses this single pain point. "
+            "The idea must reference this pain point UUID in 'addresses_pain_point_ids'.\n\n"
+        )
+    elif len(pps) >= 2:
+        requirement_block = (
+            f"**CRITICAL: The idea MUST reference AT LEAST {min_refs} pain point UUIDs in 'addresses_pain_point_ids'.**\n"
+            f"Ideas with fewer than {min_refs} references will be REJECTED. "
+            "Cross-pollinate pain points to create a stronger, more defensible idea.\n\n"
+        )
+    else:
+        requirement_block = "ERROR: No pain points provided.\n\n"
+    
+    user_text = (
+        f"Domain: {domain}\n"
+        f"Generating idea {idea_number} of {total_ideas}\n\n"
+        f"PAIN POINTS ({len(pps)} provided):\n"
+        f"{json.dumps(pp_blobs, indent=2)}\n\n"
+        f"{revision_block}"
+        f"{requirement_block}"
+        "Only use UUIDs from the pain points list above — do not invent new UUIDs.\n\n"
+        "Return a single JSON object (not an array): {\"title\": ..., \"one_liner\": ..., ...}"
+    )
+    return user_text
+
+
+def _invoke_llm_single(state: VentureForgeState, idea_number: int, total_ideas: int, retry_count: int = 0) -> dict | None:
+    """Invoke LLM to generate a SINGLE idea.
+    
+    Args:
+        state: Current pipeline state
+        idea_number: Which idea this is (1-indexed)
+        total_ideas: Total number of ideas to generate
+        retry_count: Current retry attempt (0-indexed)
+    
+    Returns:
+        Raw idea dict, or None on failure
+    """
+    llm = get_llm(temperature=0.7, max_tokens=16384, reasoning=False)
+    
+    system_prompt = _build_system_prompt()
+    system_prompt += "\n\n**CRITICAL: Output ONLY a single JSON object. No markdown fences, no explanations. Start with { and end with }.**"
+    
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=_build_user_prompt_single(state, idea_number, total_ideas)),
+    ]
+    
+    start = time.monotonic()
+    try:
+        raw = llm.invoke(messages)
+        content = raw.content if hasattr(raw, "content") else str(raw)
+    except Exception as e:
+        logger.error(f"[idea_generator] LLM invocation failed for idea {idea_number} (attempt {retry_count + 1}): {e}")
+        return None
+    
+    elapsed = time.monotonic() - start
+    logger.info(f"[idea_generator] LLM responded in {elapsed:.1f}s for idea {idea_number} (attempt {retry_count + 1})")
+    
+    # Warn if response looks truncated
+    if content and not content.rstrip().endswith('}'):
+        logger.warning(
+            f"[idea_generator] Response may be truncated for idea {idea_number}. "
+            f"Last 100 chars: {content[-100:]}"
+        )
+    
+    parsed = extract_json(content)
+    if parsed is None:
+        logger.error(
+            f"[idea_generator] JSON extraction failed for idea {idea_number} (attempt {retry_count + 1}). "
+            f"Response length: {len(content)} chars"
+        )
+        logger.error(f"[idea_generator] Response preview: {content[:500]}")
+        return None
+    
+    # Handle both dict and wrapped dict formats
+    if isinstance(parsed, dict):
+        if "ideas" in parsed and isinstance(parsed["ideas"], list):
+            return parsed["ideas"][0] if parsed["ideas"] else None
+        return parsed
+    
+    return None
+
+
 def _invoke_llm(state: VentureForgeState) -> list[dict]:
     """Call LLM, parse JSON, return raw idea dicts."""
     llm = get_llm(temperature=0.7, max_tokens=16384, reasoning=False)
@@ -228,7 +371,42 @@ def run(state: VentureForgeState) -> dict:
 
     valid_ids = {pp.id for pp in pps}
     min_refs = min(2, len(pps))  # Adaptive: require 1 ref if only 1 pain point exists
-    raw_ideas = _invoke_llm(state)
+    
+    # ONE-IDEA-AT-A-TIME GENERATION
+    # Determine how many ideas to generate
+    if state.current_revision_idea_id:
+        count = 1
+        logger.info(f"[idea_generator] Revision mode: generating 1 replacement idea for {state.current_revision_idea_id}")
+    else:
+        count = state.ideas_per_run or _IDEAS_PER_RUN_DEFAULT
+        logger.info(f"[idea_generator] Initial generation: generating {count} ideas one at a time")
+    
+    MAX_RETRIES = 3
+    raw_ideas = []
+    
+    # Generate one idea at a time
+    for i in range(count):
+        idea_number = i + 1
+        logger.info(f"[idea_generator] Generating idea {idea_number} of {count}")
+        
+        raw_idea = None
+        for retry in range(MAX_RETRIES):
+            raw_idea = _invoke_llm_single(state, idea_number, count, retry_count=retry)
+            
+            if raw_idea:
+                logger.info(f"[idea_generator] Successfully generated idea {idea_number} on attempt {retry + 1}")
+                raw_ideas.append(raw_idea)
+                break
+            
+            if retry < MAX_RETRIES - 1:
+                logger.warning(
+                    f"[idea_generator] Attempt {retry + 1}/{MAX_RETRIES} failed for idea {idea_number}. Retrying..."
+                )
+            else:
+                logger.error(
+                    f"[idea_generator] All {MAX_RETRIES} attempts failed for idea {idea_number}."
+                )
+    
     logger.info(f"[idea_generator] LLM produced {len(raw_ideas)} raw ideas")
     
     # DEBUG: Log first raw idea to diagnose validation failures
@@ -241,14 +419,6 @@ def run(state: VentureForgeState) -> dict:
         idea = _validate_idea(raw, valid_ids, min_refs)
         if idea:
             validated.append(idea)
-
-    # If we're in a revision for a specific idea, only generate 1 replacement
-    # Otherwise, generate the requested count
-    if state.current_revision_idea_id:
-        count = 1
-        logger.info(f"[idea_generator] Revision mode: generating 1 replacement idea for {state.current_revision_idea_id}")
-    else:
-        count = state.ideas_per_run or _IDEAS_PER_RUN_DEFAULT
 
     final = validated[:count]
 
