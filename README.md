@@ -14,7 +14,7 @@
 
 VentureForge is a **hierarchical multi-agent system** that automates startup idea discovery and validation:
 
-1. **Mines pain points** from Hacker News, Product Hunt, and web search
+1. **Mines pain points** from Hacker News, Product Hunt, and YouTube Data API
 2. **Clusters similar complaints** using LLM-based grouping (1-10 evidence sources per pain point)
 3. **Generates startup ideas** that address multiple pain points
 4. **Evaluates ideas** using binary yes/no rubrics (Paul Graham framework)
@@ -57,7 +57,7 @@ VentureForge is a **hierarchical multi-agent system** that automates startup ide
 | Agent | Role | Reflection Target? |
 |-------|------|--------------------|
 | **Orchestrator** | Routes tasks, manages state, handles reflection loop | — |
-| **Pain Point Miner** | Scrapes HN, Product Hunt, Tavily; clusters complaints | ✅ |
+| **Pain Point Miner** | Scrapes HN, Product Hunt, YouTube; clusters complaints | ✅ |
 | **Idea Generator** | Groups pain points into themes, generates ideas (one-at-a-time) | ✅ |
 | **Scorer** | Evaluates ideas via 8 binary checks + fatal flaw detection | — |
 | **Pitch Writer** | Writes one-page briefs (one-at-a-time, compressed prompts) | ✅ |
@@ -132,6 +132,7 @@ OPENROUTER_API_KEY=your_key_here
 
 # Optional (enhances pain point mining)
 PRODUCTHUNT_API_KEY=your_key_here
+YOUTUBE_API_KEY=your_key_here
 
 # Required for AMD vLLM production
 LLM_BASE_URL=http://134.199.205.81:8000/v1
@@ -237,7 +238,7 @@ Patients in r/chronicillness who have recently posted about prior auth denials
 | Validation | Pydantic v2 |
 | State persistence | LangGraph SQLite checkpointer |
 | Web UI | Gradio |
-| Data sources | Hacker News, Product Hunt, Tavily web search |
+| Data sources | Hacker News, Product Hunt, YouTube Data API |
 | Token optimization | One-at-a-time generation + compressed prompts |
 
 ---
@@ -269,7 +270,7 @@ ventureforge/
 │   ├── tools/
 │   │   ├── hackernews_scraper.py
 │   │   ├── producthunt_scraper.py
-│   │   └── tavily_fallback.py
+│   │   └── youtube_scraper.py
 │   │
 │   └── llm/
 │       ├── client.py            # OpenAI-compatible factory
@@ -289,6 +290,7 @@ ventureforge/
 |-----|-------------|-------|-----------|
 | OPENROUTER_API_KEY | [openrouter.ai](https://openrouter.ai) | Pay-per-token | ✅ Yes (dev) |
 | PRODUCTHUNT_API_KEY | [producthunt.com/v2/oauth/applications](https://www.producthunt.com/v2/oauth/applications) | ✅ Free | ⚠️ Optional |
+| YOUTUBE_API_KEY | [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) | ✅ Free (10K units/day) | ⚠️ Optional |
 | HF_TOKEN | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | ✅ Free | ✅ Yes (AMD) |
 
 **Note:** Reddit API requires application approval and is currently disabled.
@@ -469,7 +471,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 - **AMD** for providing MI300X compute credits
 - **LangChain/LangGraph** for the agent orchestration framework
 - **Paul Graham** for the startup evaluation framework
-- **Hacker News, Product Hunt, Tavily** for community data sources
+- **Hacker News, Product Hunt, YouTube** for community data sources
 
 ---
 
