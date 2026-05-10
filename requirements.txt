@@ -1,0 +1,17 @@
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+openai>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+gradio>=5.0.0
+praw>=7.7.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+diskcache>=5.6.0
+tenacity>=8.2.0
+langgraph-checkpoint>=4.0.3
+fastapi>=0.136.1
+uvicorn>=0.46.0
+sse-starlette>=3.4.1
