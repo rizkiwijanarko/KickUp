@@ -156,7 +156,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.idea
+.venv_old/
+UV_VENV_CLEAR=1/
+
+# IDE directories
+.idea/
+.claude/
+.cursor/
 
 # Spyder project settings
 .spyderproject
