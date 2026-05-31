@@ -302,15 +302,15 @@ def test_revision_feedback_influences_pitch_writer_prompt() -> None:
     # Even if parsing fails, we still care about the prompt text
     prompt_text = captured_prompt["text"]
     assert "THIS IS A REVISION ROUND for the pitch briefs" in prompt_text
-    assert "Critic failing checks" in prompt_text
-    assert "Do NOT change the underlying idea" in prompt_text
+    assert "Failing checks:" in prompt_text
+    assert "Do NOT change the idea, evidence_links, or core assumptions" in prompt_text
     print("  PASS")
 
     prompt_text = captured_prompt["text"]
     assert "THIS IS A REVISION ROUND for the pitch briefs" in prompt_text
-    assert "Critic failing checks" in prompt_text
+    assert "Failing checks:" in prompt_text
     assert "tagline_under_12_words" in prompt_text or "failing checks" in prompt_text
-    assert "Do NOT change the underlying idea" in prompt_text
+    assert "Do NOT change the idea, evidence_links, or core assumptions" in prompt_text
     print("  PASS")
 
 

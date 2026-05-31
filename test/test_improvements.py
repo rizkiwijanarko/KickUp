@@ -80,9 +80,9 @@ def test_1_multi_source_pain_point_schema():
     return True
 
 
-def test_2_critic_rubric_has_5_checks():
-    """Test that critic rubric has 5 checks (not 7)."""
-    print("\n[TEST 2] Critic rubric reduced to 5 checks...")
+def test_2_critic_rubric_has_8_checks():
+    """Test that critic rubric has 8 checks (updated from 5)."""
+    print("\n[TEST 2] Critic rubric has 8 checks...")
     
     rubric = CritiqueRubric(
         all_claims_evidence_backed=True,
@@ -90,19 +90,23 @@ def test_2_critic_rubric_has_5_checks():
         tagline_under_12_words=True,
         target_is_contained_fire=True,
         competition_embraced_with_thesis=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
     )
     
     # Count fields
     field_count = len(rubric.model_fields)
-    assert field_count == 5, f"Expected 5 rubric fields, got {field_count}"
+    assert field_count == 8, f"Expected 8 rubric fields, got {field_count}"
     
     # Verify removed fields don't exist
     assert not hasattr(rubric, 'unscalable_acquisition_concrete'), "Manual outreach check should be removed"
     assert not hasattr(rubric, 'gtm_leads_with_manual_recruitment'), "GTM manual recruitment check should be removed"
     
-    print("  ✓ Rubric has exactly 5 fields")
+    print("  ✓ Rubric has exactly 8 fields")
     print(f"  ✓ Fields: {list(rubric.model_fields.keys())}")
     print("  ✓ Manual outreach checks removed")
+    print("  ✓ New checks: minimum_evidence_sources, scorer_verdict_justified, validation_plan_complete")
     return True
 
 
@@ -141,7 +145,7 @@ def test_4_backward_compatibility():
     
     # Create pain point with single evidence (like old format)
     pp = PainPoint(
-        title='Test',
+        title='Test Pain Point',
         description='Test description that is long enough to pass validation',
         rubric=PainPointRubric(
             is_genuine_current_frustration=True,
@@ -179,7 +183,7 @@ def test_5_evidence_validation():
     # Test minimum evidence requirement
     try:
         pp = PainPoint(
-            title='Test',
+            title='Test Pain Point',
             description='Test description that is long enough',
             rubric=PainPointRubric(
                 is_genuine_current_frustration=True,
@@ -205,7 +209,7 @@ def test_5_evidence_validation():
     
     try:
         pp = PainPoint(
-            title='Test',
+            title='Test Pain Point',
             description='Test description that is long enough',
             rubric=PainPointRubric(
                 is_genuine_current_frustration=True,
@@ -231,7 +235,7 @@ def test_5_evidence_validation():
         ]
         
         pp = PainPoint(
-            title='Test',
+            title='Test Pain Point',
             description='Test description that is long enough',
             rubric=PainPointRubric(
                 is_genuine_current_frustration=True,
@@ -304,8 +308,8 @@ def run_all_tests():
     """Run all tests and report results."""
     tests = [
         ("Multi-source pain points", test_1_multi_source_pain_point_schema),
-        ("Critic rubric (5 checks)", test_2_critic_rubric_has_5_checks),
-        ("Max revisions (3)", test_3_max_revisions_default_is_3),
+        ("Critic rubric (8 checks)", test_2_critic_rubric_has_8_checks),
+        ("Max revisions (2)", test_3_max_revisions_default_is_3),
         ("Backward compatibility", test_4_backward_compatibility),
         ("Evidence validation", test_5_evidence_validation),
         ("State serialization", test_6_state_serialization),

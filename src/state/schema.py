@@ -387,6 +387,7 @@ class Critique(BaseModel):
             scorer_issue = not r.scorer_verdict_justified
             positioning_failed = (not r.target_is_contained_fire) or (not r.competition_embraced_with_thesis)
             writing_failed = not r.tagline_under_12_words
+            validation_plan_failed = not r.validation_plan_complete
             
             # Priority 1: Hallucinated URLs → pitch_writer (fix the URLs)
             if hallucinated_urls:
@@ -397,10 +398,13 @@ class Critique(BaseModel):
             # Priority 3: Insufficient evidence sources → pitch_writer (cite more)
             elif insufficient_sources:
                 self.target_agent = "pitch_writer"
-            # Priority 4: Weak claims but URLs are real → pitch_writer (tone down claims)
+            # Priority 4: Validation plan incomplete → pitch_writer (add discovery questions)
+            elif validation_plan_failed:
+                self.target_agent = "pitch_writer"
+            # Priority 5: Weak claims but URLs are real → pitch_writer (tone down claims)
             elif weak_claims and not hallucinated_urls:
                 self.target_agent = "pitch_writer"
-            # Priority 5: Writing/tone only → pitch_writer
+            # Priority 6: Writing/tone only → pitch_writer
             else:
                 self.target_agent = "pitch_writer"
 
@@ -522,8 +526,9 @@ class VentureForgeState(BaseModel):
     @computed_field
     @property
     def filtered_pain_points(self) -> list[PainPoint]:
-        """Pain points that passed their own internal rubric."""
-        return [pp for pp in self.pain_points if pp.passes_rubric]
+        """Pain points that passed their own internal rubric, sorted by evidence count (descending)."""
+        passing = [pp for pp in self.pain_points if pp.passes_rubric]
+        return sorted(passing, key=lambda pp: len(pp.evidence), reverse=True)
 
     @computed_field
     @property

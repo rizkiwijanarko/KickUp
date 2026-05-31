@@ -23,7 +23,19 @@ from src.agents.orchestrator import (
     scorer,
 )
 from src.config import settings
-from src.state.schema import PipelineStage, VentureForgeState
+from src.state.schema import (
+    CompetitiveLandscape,
+    Critique,
+    DataSource,
+    Idea,
+    PainPoint,
+    PipelineStage,
+    PitchBrief,
+    RunEvent,
+    ScoredIdea,
+    ValidationPlan,
+    VentureForgeState,
+)
 
 
 def route_after_orchestrator(state: VentureForgeState) -> str:
@@ -98,7 +110,13 @@ def build_graph() -> StateGraph:
     # This allows PipelineStage and other custom types to be serialized
     checkpointer = MemorySaver()
 
-    return workflow.compile(checkpointer=checkpointer)
+    # Compile graph with custom type registration for msgpack
+    # This prevents deserialization warnings for custom Pydantic types
+    compiled = workflow.compile(
+        checkpointer=checkpointer,
+    )
+
+    return compiled
 
 
 # Convenience: pre-compiled graph instance

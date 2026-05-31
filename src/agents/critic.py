@@ -8,7 +8,16 @@ from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import coerce_rubric_bools, extract_json, get_llm
+from src.constants import (
+    CRITIC_LLM_MAX_TOKENS,
+    CRITIC_LLM_TEMPERATURE,
+    ERROR_CRITIC_JSON_EXTRACTION_FAILED,
+    ERROR_CRITIC_LLM_INVOCATION_FAILED,
+    ERROR_CRITIC_PARSE_FAILED,
+    WARNING_CRITIC_NO_BRIEFS,
+)
+from src.exceptions import LLMError, ValidationError
+from src.llm.client import coerce_rubric_bools, get_llm, get_structured_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
     Critique,
@@ -20,33 +29,96 @@ from src.state.schema import (
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Prompt Building
+# ============================================================================
+
+
 def _build_system_prompt() -> str:
-    return get_prompt("critic")
+    """Build the system prompt for the Critic agent.
+
+    Returns:
+        System prompt
+    """
+    base_prompt = get_prompt("critic")
+    # No JSON instruction needed - structured output handles this
+    return base_prompt
+
+
+def _get_brief_to_review(state: VentureForgeState) -> tuple[int, object]:
+    """Get the pitch brief to review based on current_critique_index.
+    
+    Args:
+        state: Current pipeline state
+        
+    Returns:
+        Tuple of (index, brief)
+    """
+    if not state.pitch_briefs:
+        raise ValidationError(WARNING_CRITIC_NO_BRIEFS)
+    
+    index = min(state.current_critique_index, len(state.pitch_briefs) - 1)
+    return index, state.pitch_briefs[index]
+
+
+def _get_scored_idea(state: VentureForgeState, idea_id: UUID) -> dict | None:
+    """Look up the Scorer output for a given idea.
+    
+    Args:
+        state: Current pipeline state
+        idea_id: ID of the idea to find
+        
+    Returns:
+        Scored idea dict or None if not found
+    """
+    for scored in state.scored_ideas:
+        if scored.idea_id == idea_id:
+            return scored.model_dump(mode="json")
+    return None
+
+
+def _serialize_brief(brief: object) -> dict:
+    """Serialize a pitch brief for JSON output.
+    
+    Args:
+        brief: Pitch brief to serialize
+        
+    Returns:
+        Serialized brief dict with UUID converted to string
+    """
+    brief_dict = brief.model_dump(mode="json")
+    brief_dict["idea_id"] = str(brief_dict["idea_id"])
+    return brief_dict
 
 
 def _build_user_prompt(state: VentureForgeState) -> str:
-    # Critique the pitch brief at current_critique_index
-    if not state.pitch_briefs:
-        return "No pitch briefs to review."
+    """Build the user prompt for the Critic agent.
     
-    # Get the brief at current index (bounded by available briefs)
-    index = min(state.current_critique_index, len(state.pitch_briefs) - 1)
-    brief = state.pitch_briefs[index]
-
+    Args:
+        state: Current pipeline state
+        
+    Returns:
+        User prompt with brief details and context
+    """
+    index, brief = _get_brief_to_review(state)
     revision_count = state.get_revision_count(brief.idea_id)
-
-    # Look up the Scorer output for this pitch so the Critic can cross-reference
-    scored_idea = None
-    for s in state.scored_ideas:
-        if s.idea_id == brief.idea_id:
-            scored_idea = s.model_dump(mode="json")
-            break
-
-    # Serialize the full pitch brief structure (including nested fields)
-    brief_dict = brief.model_dump(mode="json")
-    # Convert UUID to string for JSON serialization
-    brief_dict["idea_id"] = str(brief_dict["idea_id"])
-
+    scored_idea = _get_scored_idea(state, brief.idea_id)
+    brief_dict = _serialize_brief(brief)
+    
+    # Get relevant pain points for this idea to verify evidence_links
+    idea = next((i for i in state.ideas if i.id == brief.idea_id), None)
+    relevant_pain_points = []
+    if idea:
+        for pp_id in idea.addresses_pain_point_ids:
+            pp = next((p for p in state.filtered_pain_points if p.id == pp_id), None)
+            if pp:
+                pp_dict = {
+                    "id": str(pp.id),
+                    "title": pp.title,
+                    "evidence_urls": [ev.source_url for ev in pp.evidence]
+                }
+                relevant_pain_points.append(pp_dict)
+    
     user_text = (
         f"Domain: {state.domain}\n"
         f"Current Revision Count: {revision_count}\n"
@@ -54,166 +126,243 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         f"PITCH BRIEF TO REVIEW (structured):\n{json.dumps(brief_dict, indent=2)}\n\n"
         f"PITCH BRIEF MARKDOWN:\n{brief.markdown_content}\n\n"
         f"SCORER OUTPUT FOR THIS IDEA:\n{json.dumps(scored_idea, indent=2) if scored_idea else 'Not found'}\n\n"
+        f"RELEVANT PAIN POINTS (for evidence verification):\n{json.dumps(relevant_pain_points, indent=2)}\n\n"
         "Provide a brutal, honest critique using the binary rubric. "
-        "If it fails any check, specify which worker should fix it. "
-        "Ensure to only return a JSON object."
+        "If it fails any check, specify which worker should fix it."
     )
     return user_text
 
 
-def _invoke_llm(state: VentureForgeState) -> dict:
-    # Use reasoning=False to disable thinking mode for structured JSON output
-    llm = get_llm(temperature=0.2, max_tokens=2048, reasoning=False)
-    
-    # Add explicit JSON-only instruction
-    system_prompt = _build_system_prompt()
-    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON object. No markdown code fences, no explanations, no preamble. Start with { and end with }.**"
-    
+# ============================================================================
+# LLM Interaction
+# ============================================================================
+
+
+def _invoke_llm(state: VentureForgeState) -> Critique:
+    """Invoke the LLM to generate a critique using structured output.
+
+    Args:
+        state: Current pipeline state
+
+    Returns:
+        Critique object from structured output
+
+    Raises:
+        LLMError: If LLM invocation fails
+    """
+    llm = get_structured_llm(
+        Critique,
+        temperature=CRITIC_LLM_TEMPERATURE,
+        reasoning=False,
+    )
+
     messages = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=_build_system_prompt()),
         HumanMessage(content=_build_user_prompt(state)),
     ]
 
     start = time.monotonic()
     try:
-        raw = llm.invoke(messages)
-        content = raw.content if hasattr(raw, "content") else str(raw)
+        critique = llm.invoke(messages)
     except Exception as e:
         logger.error(f"[critic] LLM invocation failed: {e}")
-        return {}
+        raise LLMError(ERROR_CRITIC_LLM_INVOCATION_FAILED.format(error=str(e)))
 
-    logger.info(f"[critic] LLM responded in {time.monotonic()-start:.1f}s")
+    elapsed = time.monotonic() - start
+    logger.info(f"[critic] LLM responded in {elapsed:.1f}s")
+
+    return critique
+
+
+# ============================================================================
+# Revision Logic
+# ============================================================================
+
+
+def _is_at_max_revisions(state: VentureForgeState, idea_id: UUID) -> bool:
+    """Check if an idea has reached max revisions.
     
-    # Debug: log response preview
-    logger.info(f"[critic] Response preview (first 500 chars): {content[:500]}")
+    Args:
+        state: Current pipeline state
+        idea_id: ID of the idea to check
+        
+    Returns:
+        True if at max revisions, False otherwise
+    """
+    return state.get_revision_count(idea_id) >= state.max_revisions
 
-    parsed = extract_json(content)
-    if parsed is None:
-        logger.error(f"[critic] JSON extraction failed. Response length: {len(content)} chars")
-        logger.error(f"[critic] Full response (first 2000 chars): {content[:2000]}")
-        return {}
-    return parsed
+
+def _handle_max_revisions(critique: Critique, state: VentureForgeState) -> Critique:
+    """Handle critique when max revisions reached.
+    
+    If the critique still fails at max revisions, mark as 'max_revisions_reached'
+    instead of forcing approval.
+    
+    Args:
+        critique: The critique object
+        state: Current pipeline state
+        
+    Returns:
+        Modified critique with max_revisions_reached status
+    """
+    if not critique.all_pass:
+        logger.warning(
+            f"[critic] Max revisions reached for idea {critique.idea_id}. "
+            f"LLM critique failed but cannot revise further. "
+            f"Marking as 'max_revisions_reached' instead of 'approved'."
+        )
+        critique.approval_status = "max_revisions_reached"
+        critique.revision_feedback = (
+            f"Max revisions reached ({state.max_revisions}). Cannot revise further. "
+            f"Original feedback: {critique.revision_feedback}"
+        )
+    return critique
+
+
+# ============================================================================
+# Event & Patch Building
+# ============================================================================
+
+
+def _build_critique_message(
+    critique: Critique,
+    at_max_revisions: bool,
+    max_revisions: int
+) -> str:
+    """Build the event message for a critique.
+    
+    Args:
+        critique: The critique object
+        at_max_revisions: Whether at max revisions
+        max_revisions: Max revisions allowed
+        
+    Returns:
+        Event message string
+    """
+    if at_max_revisions and not critique.all_pass:
+        return (
+            f"Auto-approved pitch for idea {critique.idea_id} after "
+            f"reaching max revisions ({max_revisions}), despite LLM critique failing."
+        )
+    elif critique.all_pass:
+        return f"Approved pitch for idea {critique.idea_id}."
+    else:
+        return (
+            f"Critique for idea {critique.idea_id}: {len(critique.failing_checks)} "
+            f"checks failed. Routing to {critique.target_agent} for revision."
+        )
+
+
+def _build_success_patch(
+    state: VentureForgeState,
+    critique: Critique,
+    at_max_revisions: bool
+) -> dict:
+    """Build the patch dict for a successful critique.
+    
+    Args:
+        state: Current pipeline state
+        critique: The critique object
+        at_max_revisions: Whether at max revisions
+        
+    Returns:
+        Patch dict for state update
+    """
+    message = _build_critique_message(critique, at_max_revisions, state.max_revisions)
+    
+    patch = {
+        "critique": critique,
+        "current_stage": PipelineStage.CRITIQUING,
+        "next_node": "orchestrator",
+    }
+    
+    patch.update(
+        state.add_event(
+            agent="critic",
+            stage=PipelineStage.CRITIQUING,
+            kind="info",
+            message=message,
+            idea_id=critique.idea_id,
+        )
+    )
+    
+    return patch
+
+
+def _build_error_patch(
+    state: VentureForgeState,
+    error_message: str,
+    kind: str = "error"
+) -> dict:
+    """Build the patch dict for an error case.
+    
+    Args:
+        state: Current pipeline state
+        error_message: Error message to log
+        kind: Event kind (error, warning)
+        
+    Returns:
+        Patch dict for state update
+    """
+    patch = {
+        "current_stage": PipelineStage.CRITIQUING,
+        "next_node": "orchestrator",
+    }
+    
+    patch.update(
+        state.add_event(
+            agent="critic",
+            stage=PipelineStage.CRITIQUING,
+            kind=kind,
+            message=error_message,
+        )
+    )
+    
+    return patch
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 
 def run(state: VentureForgeState) -> dict:
-    if not state.pitch_briefs:
-        logger.warning("[critic] no pitch briefs to critique")
-        patch = {
-            "current_stage": PipelineStage.CRITIQUING,
-            "next_node": "orchestrator",
-        }
-        patch.update(
-            state.add_event(
-                agent="critic",
-                stage=PipelineStage.CRITIQUING,
-                kind="warning",
-                message="No pitch briefs available for critique.",
-            )
-        )
-        return patch
-
-    # Select the brief to critique using current_critique_index
-    index = min(state.current_critique_index, len(state.pitch_briefs) - 1)
-    brief = state.pitch_briefs[index]
-
-    # Check if we're at max revisions (but still run the LLM to evaluate the final revision)
-    at_max_revisions = state.get_revision_count(brief.idea_id) >= state.max_revisions
-
-    raw = _invoke_llm(state)
-    if not raw:
-        # Fallback to simple revision if LLM fails
-        patch = {
-            "current_stage": PipelineStage.CRITIQUING,
-            "next_node": "orchestrator",
-        }
-        patch.update(
-            state.add_event(
-                agent="critic",
-                stage=PipelineStage.CRITIQUING,
-                kind="warning",
-                message="Critic LLM invocation failed; keeping previous state.",
-            )
-        )
-        return patch
-
+    """Run the Critic agent to evaluate a pitch brief.
+    
+    The Critic performs adversarial review using a binary rubric. If the brief
+    fails any checks, it routes back to the appropriate worker for revision.
+    At max revisions, the brief is marked as 'max_revisions_reached' rather
+    than forcing approval.
+    
+    Args:
+        state: Current pipeline state
+        
+    Returns:
+        Patch dict to update state with critique results
+    """
+    # Validate we have briefs to critique
     try:
-        # Unwrap if LLM returned {"critique": {...}}
-        if "critique" in raw:
-            raw = raw["critique"]
-
-        # Coerce rubric booleans
-        if "rubric" in raw and isinstance(raw["rubric"], dict):
-            raw["rubric"] = coerce_rubric_bools(raw["rubric"])
-        
-        # Handle list revision_feedback (coerce to string)
-        if "revision_feedback" in raw and isinstance(raw["revision_feedback"], list):
-            raw["revision_feedback"] = "\n".join(raw["revision_feedback"])
-
-        # Add idea_id (required by Critique model but not in LLM output)
-        raw["idea_id"] = brief.idea_id
-        
-        critique = Critique(**raw)
-        
-        # If we're at max revisions AND the critique still fails, mark as max_revisions_reached
-        if at_max_revisions and not critique.all_pass:
-            logger.warning(
-                f"[critic] Max revisions reached for idea {brief.idea_id}. "
-                f"LLM critique failed but cannot revise further. "
-                f"Marking as 'max_revisions_reached' instead of 'approved'."
-            )
-            # Keep the critique honest (all_pass=False) but change approval_status
-            critique.approval_status = "max_revisions_reached"
-            critique.revision_feedback = (
-                f"Max revisions reached ({state.max_revisions}). Cannot revise further. "
-                f"Original feedback: {critique.revision_feedback}"
-            )
-
-        patch = {
-            "critique": critique,
-            "current_stage": PipelineStage.CRITIQUING,
-            "next_node": "orchestrator",
-        }
-        
-        if at_max_revisions and not critique.all_pass:
-            # This branch is now unreachable (we override above), but kept for clarity
-            message = (
-                f"Auto-approved pitch for idea {brief.idea_id} after "
-                f"reaching max revisions ({state.max_revisions}), despite LLM critique failing."
-            )
-        elif critique.all_pass:
-            message = f"Approved pitch for idea {brief.idea_id}."
-        else:
-            message = (
-                f"Critique for idea {brief.idea_id}: {len(critique.failing_checks)} "
-                f"checks failed. Routing to {critique.target_agent} for revision."
-            )
-        
-        patch.update(
-            state.add_event(
-                agent="critic",
-                stage=PipelineStage.CRITIQUING,
-                kind="info",
-                message=message,
-                idea_id=brief.idea_id,
-            )
+        index, brief = _get_brief_to_review(state)
+    except ValidationError as e:
+        logger.warning(f"[critic] {e}")
+        return _build_error_patch(state, str(e), kind="warning")
+    
+    # Check revision status
+    at_max_revisions = _is_at_max_revisions(state, brief.idea_id)
+    
+    # Invoke LLM
+    try:
+        critique = _invoke_llm(state)
+    except (LLMError, ValidationError) as e:
+        logger.error(f"[critic] {e}")
+        return _build_error_patch(
+            state,
+            "Critic LLM invocation failed; keeping previous state.",
+            kind="warning"
         )
-        return patch
 
-    except Exception as e:
-        logger.error(f"[critic] Failed to parse critique: {e}")
-        # Convert UUID to string for JSON serialization
-        raw_for_log = {k: str(v) if isinstance(v, UUID) else v for k, v in raw.items()}
-        logger.error(f"[critic] Raw LLM output: {json.dumps(raw_for_log, indent=2)}")
-        patch = {
-            "current_stage": PipelineStage.CRITIQUING,
-            "next_node": "orchestrator",
-        }
-        patch.update(
-            state.add_event(
-                agent="critic",
-                stage=PipelineStage.CRITIQUING,
-                kind="error",
-                message=f"Failed to parse critique: {e}",
-            )
-        )
-        return patch
+    # Handle max revisions case
+    if at_max_revisions:
+        critique = _handle_max_revisions(critique, state)
+
+    return _build_success_patch(state, critique, at_max_revisions)

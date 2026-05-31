@@ -1,12 +1,13 @@
-"""Pain Point Miner — extracts structured pain points from multiple sources.
+"""
+Pain Point Miner — extracts structured pain points from multiple sources.
 
+REFACTORED: Following clean code principles with extracted helper functions.
 
-Pipeline flow
-=============
-1. Scrape from 3 sources: HackerNews + ProductHunt + YouTube (Tavily disabled to reduce LLM load)
-2. Combine results to maximize pain point discovery (no early stopping)
-3. LLM extracts structured pain points from the combined corpus of comments
-4. Code validates that each raw_quote is an actual substring (TEMPORARILY DISABLED)
+Pipeline flow:
+1. Scrape from multiple sources (HackerNews, ProductHunt, YouTube)
+2. Combine results to maximize pain point discovery
+3. LLM extracts structured pain points from combined corpus
+4. Validate pain points
 5. Return only pain points where all rubric checks pass
 """
 from __future__ import annotations
@@ -15,136 +16,304 @@ import json
 import logging
 import time
 from uuid import uuid4
+from typing import List, Dict, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.config import settings
+from src.constants import (
+    MAX_PAIN_POINTS_DEFAULT,
+    MAX_COMMENTS_PER_SUBREDDIT,
+    MAX_TOTAL_COMMENTS,
+    COMMENT_TEXT_MAX_LENGTH,
+    POST_TITLE_MAX_LENGTH,
+    MIN_PAIN_POINT_LENGTH,
+)
+from src.exceptions import LLMError, LLMJSONParseError, NoDataFoundError
 from src.llm.client import coerce_rubric_bools, coerce_yes_no, extract_json, get_llm
 from src.llm.prompts import get_prompt
-from src.state.schema import DataSource, PainPoint, PainPointRubric, PipelineStage, VentureForgeState
-from src.tools.reddit_scraper import COMMUNITY_MAP, ScrapedComment, validate_quote
-from src.tools.tavily_fallback import search_communities
-from src.tools.hackernews_scraper import scrape_for_domain as hn_scrape_for_domain
-from src.tools.producthunt_scraper import scrape_for_domain as ph_scrape_for_domain
-from src.tools.tavily_content_scraper import scrape_for_domain as tavily_content_scrape_for_domain
-from src.tools.youtube_scraper import scrape_for_domain as youtube_scrape_for_domain
+from src.state.schema import (
+    DataSource,
+    PainPoint,
+    PainPointEvidence,
+    PainPointRubric,
+    PipelineStage,
+    VentureForgeState,
+)
+from src.tools.reddit_scraper import ScrapedComment
+from src.tools.hackernews_scraper import scrape_for_domain as scrape_hackernews
+from src.tools.producthunt_scraper import scrape_for_domain as scrape_producthunt
+from src.tools.youtube_scraper import scrape_for_domain as scrape_youtube
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------
-# Thresholds (derived from state.max_pain_points)
-# ------------------------------------------------------------------
-_TAVILY_FALLBACK_RATIO: float = 0.5
-_MAX_COMMENTS_PER_SUBREDDIT: int = 50
-_MAX_TOTAL_COMMENTS: int = 200
-_MAX_PAIN_POINTS_DEFAULT: int = 30
+
+# =============================================================================
+# SCRAPING ORCHESTRATION
+# =============================================================================
 
 
-def _build_system_prompt() -> str:
-    return get_prompt("pain_point_miner")
+def scrape_all_sources(domain: str, max_comments: int) -> List[ScrapedComment]:
+    """
+    Scrape pain points from all available sources.
+
+    Args:
+        domain: Domain to search for
+        max_comments: Maximum comments to collect
+
+    Returns:
+        List of scraped comments from all sources
+    """
+    all_comments: List[ScrapedComment] = []
+
+    # Scrape HackerNews
+    try:
+        hn_comments = scrape_hackernews(domain, max_total_comments=max_comments // 3)
+        logger.info(f"[pain_point_miner] HackerNews: {len(hn_comments)} comments")
+        all_comments.extend(hn_comments)
+    except Exception as e:
+        logger.warning(f"[pain_point_miner] HackerNews scraping failed: {e}")
+
+    # Scrape ProductHunt
+    try:
+        ph_comments = scrape_producthunt(domain, max_total_comments=max_comments // 3)
+        logger.info(f"[pain_point_miner] ProductHunt: {len(ph_comments)} comments")
+        all_comments.extend(ph_comments)
+    except Exception as e:
+        logger.warning(f"[pain_point_miner] ProductHunt scraping failed: {e}")
+
+    # Scrape YouTube
+    try:
+        yt_comments = scrape_youtube(domain, max_total_comments=max_comments // 3)
+        logger.info(f"[pain_point_miner] YouTube: {len(yt_comments)} comments")
+        all_comments.extend(yt_comments)
+    except Exception as e:
+        logger.warning(f"[pain_point_miner] YouTube scraping failed: {e}")
+
+    # Limit total comments
+    if len(all_comments) > max_comments:
+        all_comments = all_comments[:max_comments]
+
+    logger.info(
+        f"[pain_point_miner] Total scraped: {len(all_comments)} comments "
+        f"from {domain}"
+    )
+
+    return all_comments
 
 
-def _build_user_prompt(
-    state: VentureForgeState,
-    comments: list[ScrapedComment],
-) -> str:
-    max_pp = state.max_pain_points or _MAX_PAIN_POINTS_DEFAULT
-    feedback = state.revision_feedback or "None"
+# =============================================================================
+# COMMENT NORMALIZATION
+# =============================================================================
 
-    # Debug: log what we received
-    logger.info(f"[pain_point_miner] Received {len(comments)} items of type: {[type(c).__name__ for c in comments[:5]]}")
 
-    # Defensive: ensure all items are ScrapedComment objects
-    # Convert dicts to ScrapedComment if needed (fallback from broken scrapers)
-    normalized_comments: list[ScrapedComment] = []
-    for i, c in enumerate(comments):
-        if isinstance(c, ScrapedComment):
-            normalized_comments.append(c)
-        elif isinstance(c, dict):
-            # Try to convert dict to ScrapedComment
+def normalize_comments(comments: List[Any]) -> List[ScrapedComment]:
+    """
+    Normalize comments to ScrapedComment objects.
+
+    Handles both ScrapedComment objects and dict representations.
+
+    Args:
+        comments: List of comments (ScrapedComment or dict)
+
+    Returns:
+        List of normalized ScrapedComment objects
+    """
+    normalized: List[ScrapedComment] = []
+
+    for i, comment in enumerate(comments):
+        if isinstance(comment, ScrapedComment):
+            normalized.append(comment)
+        elif isinstance(comment, dict):
             try:
-                normalized_comments.append(
+                normalized.append(
                     ScrapedComment(
-                        text=c.get("text", ""),
-                        url=c.get("url", ""),
-                        subreddit=c.get("subreddit", "unknown"),
-                        post_title=c.get("post_title", ""),
+                        text=comment.get("text", ""),
+                        url=comment.get("url", ""),
+                        subreddit=comment.get("subreddit", "unknown"),
+                        post_title=comment.get("post_title", ""),
                     )
                 )
             except Exception as e:
-                logger.warning(f"[pain_point_miner] Skipping malformed comment dict at index {i}: {e}")
-                continue
+                logger.warning(
+                    f"[pain_point_miner] Skipping malformed comment dict at "
+                    f"index {i}: {e}"
+                )
         else:
-            logger.warning(f"[pain_point_miner] Skipping non-ScrapedComment item at index {i}: type={type(c).__name__}, value={str(c)[:100]}")
-            continue
+            logger.warning(
+                f"[pain_point_miner] Skipping non-ScrapedComment item at "
+                f"index {i}: type={type(comment).__name__}"
+            )
 
-    logger.info(f"[pain_point_miner] Normalized to {len(normalized_comments)} valid ScrapedComment objects")
+    logger.info(
+        f"[pain_point_miner] Normalized {len(normalized)} valid comments "
+        f"from {len(comments)} total"
+    )
 
-    # Serialize comments compactly
-    comment_blobs: list[dict] = [
+    return normalized
+
+
+def serialize_comments(comments: List[ScrapedComment]) -> List[Dict[str, str]]:
+    """
+    Serialize comments to compact dict format for LLM prompt.
+
+    Args:
+        comments: List of ScrapedComment objects
+
+    Returns:
+        List of comment dictionaries with truncated text
+    """
+    return [
         {
-            "text": c.text[:800],  # truncate to keep token count sane
-            "url": c.url,
-            "subreddit": c.subreddit,
-            "post_title": c.post_title[:120],
+            "text": comment.text[:COMMENT_TEXT_MAX_LENGTH],
+            "url": comment.url,
+            "subreddit": comment.subreddit,
+            "post_title": comment.post_title[:POST_TITLE_MAX_LENGTH],
         }
-        for c in normalized_comments
+        for comment in comments
     ]
 
-    payload: dict = {
-        "domain": state.domain,
-        "max_pain_points": max_pp,
-        "revision_feedback": feedback,
-        "comments": comment_blobs,
-    }
 
-    user_text = (
-        f"Extract up to {max_pp} pain points from the {len(normalized_comments)} comments below.\n"
-        f"Domain: {state.domain}\n"
+# =============================================================================
+# PROMPT BUILDING
+# =============================================================================
+
+
+def build_system_prompt() -> str:
+    """Build system prompt for pain point extraction."""
+    base_prompt = get_prompt("pain_point_miner")
+    json_instruction = (
+        "\n\n**CRITICAL: Output ONLY the JSON array. "
+        "No markdown code fences, no explanations, no preamble. "
+        "Start with [ and end with ].**"
+    )
+    return base_prompt + json_instruction
+
+
+def build_user_prompt(
+    domain: str,
+    max_pain_points: int,
+    comments: List[Dict[str, str]],
+    revision_feedback: str | None = None,
+) -> str:
+    """
+    Build user prompt for pain point extraction.
+
+    Args:
+        domain: Domain to extract pain points for
+        max_pain_points: Maximum number of pain points to extract
+        comments: Serialized comments
+        revision_feedback: Optional feedback from previous attempt
+
+    Returns:
+        Formatted user prompt string
+    """
+    feedback = revision_feedback or "None"
+
+    return (
+        f"Extract up to {max_pain_points} pain points from the "
+        f"{len(comments)} comments below.\n"
+        f"Domain: {domain}\n"
         f"Revision feedback (if any): {feedback}\n\n"
-        f"COMMENTS:\n{json.dumps(comment_blobs, indent=2)}\n\n"
+        f"COMMENTS:\n{json.dumps(comments, indent=2)}\n\n"
         "Return a JSON array of pain points. Each must have: "
         "id, title, description, rubric, passes_rubric, source_url, raw_quote, source.\n"
         "The raw_quote MUST be a literal substring from one of the provided comment texts.\n"
-        f"Extract exactly {max_pp} pain points or fewer if not enough genuine points exist."
+        f"Extract exactly {max_pain_points} pain points or fewer if not enough genuine points exist."
     )
-    return user_text
 
 
-def _llm_extract_pain_points(
-    state: VentureForgeState,
-    comments: list[ScrapedComment],
-) -> list[PainPoint]:
-    """Call the LLM and parse structured pain points."""
+# =============================================================================
+# LLM INTERACTION
+# =============================================================================
+
+
+def call_llm_for_pain_points(
+    domain: str,
+    max_pain_points: int,
+    comments: List[ScrapedComment],
+    revision_feedback: str | None = None,
+) -> str:
+    """
+    Call LLM to extract pain points from comments.
+
+    Args:
+        domain: Domain to extract pain points for
+        max_pain_points: Maximum number of pain points
+        comments: List of scraped comments
+        revision_feedback: Optional feedback from previous attempt
+
+    Returns:
+        Raw LLM response content
+
+    Raises:
+        LLMError: If LLM invocation fails
+    """
     llm = get_llm(temperature=0.2, max_tokens=16384, reasoning=False)
-    
-    # Add explicit JSON-only instruction
-    system_prompt = _build_system_prompt()
-    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON array. No markdown code fences, no explanations, no preamble. Start with [ and end with ].**"
-    
+
+    serialized_comments = serialize_comments(comments)
+
     messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=_build_user_prompt(state, comments)),
+        SystemMessage(content=build_system_prompt()),
+        HumanMessage(
+            content=build_user_prompt(
+                domain=domain,
+                max_pain_points=max_pain_points,
+                comments=serialized_comments,
+                revision_feedback=revision_feedback,
+            )
+        ),
     ]
 
-    start = time.monotonic()
+    start_time = time.monotonic()
     try:
-        raw = llm.invoke(messages)
-        content = raw.content if hasattr(raw, "content") else str(raw)
+        response = llm.invoke(messages)
+        content = response.content if hasattr(response, "content") else str(response)
     except Exception as e:
-        logger.error(f"[pain_point_miner] LLM invocation failed after {time.monotonic()-start:.1f}s: {e}")
-        return []
+        elapsed = time.monotonic() - start_time
+        logger.error(
+            f"[pain_point_miner] LLM invocation failed after {elapsed:.1f}s: {e}"
+        )
+        raise LLMError(f"LLM invocation failed: {e}") from e
 
-    logger.info(f"[pain_point_miner] LLM responded in {time.monotonic()-start:.1f}s")
+    elapsed = time.monotonic() - start_time
+    logger.info(f"[pain_point_miner] LLM responded in {elapsed:.1f}s")
+    logger.debug(
+        f"[pain_point_miner] Response preview: {content[:500]}"
+    )
 
-    # Debug: log first 500 chars of response
-    logger.info(f"[pain_point_miner] Response preview (first 500 chars): {content[:500]}")
-    
-    parsed = extract_json(content)
+    return content
+
+
+# =============================================================================
+# RESPONSE PARSING
+# =============================================================================
+
+
+def parse_llm_response(response_content: str) -> List[Dict[str, Any]]:
+    """
+    Parse LLM response to extract pain point data.
+
+    Args:
+        response_content: Raw LLM response
+
+    Returns:
+        List of pain point dictionaries
+
+    Raises:
+        LLMJSONParseError: If JSON parsing fails
+    """
+    parsed = extract_json(response_content)
+
     if parsed is None:
-        logger.error(f"[pain_point_miner] JSON extraction failed. Response length: {len(content)} chars")
-        logger.error(f"[pain_point_miner] Full response (first 2000 chars): {content[:2000]}")
-        return []
+        logger.error(
+            f"[pain_point_miner] JSON extraction failed. "
+            f"Response length: {len(response_content)} chars"
+        )
+        raise LLMJSONParseError(
+            raw_response=response_content[:2000],
+            parse_error="extract_json returned None",
+        )
 
     # Handle both flat array and {"pain_points": [...]} wrapper
     if isinstance(parsed, dict) and "pain_points" in parsed:
@@ -152,42 +321,82 @@ def _llm_extract_pain_points(
     elif isinstance(parsed, list):
         raw_list = parsed
     else:
-        raw_list = []
+        logger.warning("[pain_point_miner] LLM did not return a JSON array")
+        return []
 
     if not isinstance(raw_list, list):
         logger.warning("[pain_point_miner] LLM did not return a JSON array")
         return []
 
-    pain_points: list[PainPoint] = []
-    for item in raw_list:
-        if not isinstance(item, dict):
-            continue
-        try:
-            # Parse evidence array
-            evidence_list = item.get("evidence", [])
-            if not evidence_list:
-                # Backward compatibility: if no evidence array, try old format
-                evidence_list = [{
-                    "source_url": item.get("source_url", ""),
-                    "raw_quote": item.get("raw_quote", ""),
-                    "source": item.get("source", "hackernews"),
-                }]
-            
-            from src.state.schema import PainPointEvidence
-            evidence_objects = []
-            for ev in evidence_list:
-                if isinstance(ev, dict):
-                    evidence_objects.append(PainPointEvidence(
+    return raw_list
+
+
+def parse_evidence(item: Dict[str, Any]) -> List[PainPointEvidence]:
+    """
+    Parse evidence array from pain point item.
+
+    Args:
+        item: Pain point dictionary
+
+    Returns:
+        List of PainPointEvidence objects
+    """
+    evidence_list = item.get("evidence", [])
+
+    # Backward compatibility: if no evidence array, try old format
+    if not evidence_list:
+        evidence_list = [
+            {
+                "source_url": item.get("source_url", ""),
+                "raw_quote": item.get("raw_quote", ""),
+                "source": item.get("source", "hackernews"),
+            }
+        ]
+
+    evidence_objects: List[PainPointEvidence] = []
+    for ev in evidence_list:
+        if isinstance(ev, dict):
+            try:
+                evidence_objects.append(
+                    PainPointEvidence(
                         source_url=ev["source_url"],
                         raw_quote=ev["raw_quote"],
                         source=DataSource(ev.get("source", "hackernews")),
-                    ))
-            
+                    )
+                )
+            except Exception as e:
+                logger.debug(f"[pain_point_miner] Skipping invalid evidence: {e}")
+
+    return evidence_objects
+
+
+def convert_to_pain_points(raw_list: List[Dict[str, Any]]) -> List[PainPoint]:
+    """
+    Convert raw pain point dictionaries to PainPoint objects.
+
+    Args:
+        raw_list: List of pain point dictionaries from LLM
+
+    Returns:
+        List of PainPoint objects
+    """
+    pain_points: List[PainPoint] = []
+
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            evidence_objects = parse_evidence(item)
+
             if not evidence_objects:
-                logger.debug(f"[pain_point_miner] skipping pain point with no valid evidence: {item.get('title', 'unknown')}")
+                logger.debug(
+                    f"[pain_point_miner] Skipping pain point with no valid evidence: "
+                    f"{item.get('title', 'unknown')}"
+                )
                 continue
-            
-            pp = PainPoint(
+
+            pain_point = PainPoint(
                 id=item.get("id") or uuid4(),
                 title=item["title"],
                 description=item["description"],
@@ -195,215 +404,172 @@ def _llm_extract_pain_points(
                 passes_rubric=coerce_yes_no(item["passes_rubric"]),
                 evidence=evidence_objects,
             )
-            pain_points.append(pp)
+            pain_points.append(pain_point)
+
         except Exception as e:
-            logger.debug(f"[pain_point_miner] skipping malformed pain point: {e}")
-            continue
+            logger.debug(f"[pain_point_miner] Skipping malformed pain point: {e}")
 
     return pain_points
 
 
-def _validate_pain_points(
-    pain_points: list[PainPoint],
-    comments: list[ScrapedComment],
-) -> list[PainPoint]:
-    """Code-level validation: ALL raw_quotes in evidence must exist verbatim.
+# =============================================================================
+# VALIDATION
+# =============================================================================
 
-    Also enforces that descriptions are non-trivial and de-duplicates
-    near-identical pain points.
-    
-    TEMPORARY: Quote validation is DISABLED to unblock the pipeline.
-    The LLM paraphrases quotes instead of copying them verbatim.
-    TODO: Implement fuzzy matching (85% similarity threshold).
+
+def validate_pain_points(pain_points: List[PainPoint]) -> List[PainPoint]:
     """
-    # TEMPORARY FIX: Skip quote validation
-    logger.warning("[pain_point_miner] Quote validation TEMPORARILY DISABLED for testing")
-    
-    validated: list[PainPoint] = []
-    for pp in pain_points:
-        # Skip quote validation for now
-        # TODO: Re-enable with fuzzy matching
-        
+    Validate pain points meet quality criteria.
+
+    NOTE: Quote validation is temporarily disabled.
+    TODO: Implement fuzzy matching (85% similarity threshold).
+
+    Args:
+        pain_points: List of pain points to validate
+
+    Returns:
+        List of validated pain points
+    """
+    logger.warning(
+        "[pain_point_miner] Quote validation TEMPORARILY DISABLED for testing"
+    )
+
+    validated: List[PainPoint] = []
+
+    for pain_point in pain_points:
         # Force has_verbatim_quote to True (skipping validation)
-        if not pp.rubric.has_verbatim_quote:
-            pp.rubric = PainPointRubric(
-                is_genuine_current_frustration=pp.rubric.is_genuine_current_frustration,
+        if not pain_point.rubric.has_verbatim_quote:
+            pain_point.rubric = PainPointRubric(
+                is_genuine_current_frustration=pain_point.rubric.is_genuine_current_frustration,
                 has_verbatim_quote=True,
-                user_segment_specific=pp.rubric.user_segment_specific,
+                user_segment_specific=pain_point.rubric.user_segment_specific,
             )
 
         # Recompute passes_rubric
-        pp.passes_rubric = (
-            pp.rubric.is_genuine_current_frustration
-            and pp.rubric.has_verbatim_quote
-            and pp.rubric.user_segment_specific
-        )
+        pain_point.passes_rubric = pain_point.rubric.all_pass
 
-        if not pp.passes_rubric:
-            logger.debug(f"[pain_point_miner] REJECTED — rubric failed: {pp.title}")
-            continue
-
-        # Additional quality filter: drop extremely short / vague descriptions
-        if len(pp.description.strip()) < 40:
+        if not pain_point.passes_rubric:
             logger.debug(
-                f"[pain_point_miner] REJECTED — description too short/vague: {pp.description!r}"
+                f"[pain_point_miner] REJECTED — rubric failed: {pain_point.title}"
             )
             continue
 
-        validated.append(pp)
-
-    # De-duplicate by (primary source_url, normalized description)
-    deduped: list[PainPoint] = []
-    seen_keys: set[tuple[str, str]] = set()
-    for pp in validated:
-        key = (
-            pp.source_url,  # Uses @property which returns first evidence URL
-            " ".join(pp.description.lower().split()),
-        )
-        if key in seen_keys:
-            logger.debug(f"[pain_point_miner] DEDUPED — {pp.title!r} / {pp.source_url}")
+        # Quality filter: drop extremely short/vague descriptions
+        if len(pain_point.description.strip()) < MIN_PAIN_POINT_LENGTH:
+            logger.debug(
+                f"[pain_point_miner] REJECTED — description too short: "
+                f"{pain_point.description!r}"
+            )
             continue
-        seen_keys.add(key)
-        deduped.append(pp)
 
-    return deduped
+        validated.append(pain_point)
+
+    logger.info(
+        f"[pain_point_miner] Validated {len(validated)} of {len(pain_points)} "
+        f"pain points"
+    )
+
+    return validated
 
 
-# ------------------------------------------------------------------
-# Multi-source scraping (HackerNews, ProductHunt, Tavily, YouTube)
-# ------------------------------------------------------------------
-def _scrape_all_sources(domain: str) -> tuple[list[ScrapedComment], DataSource]:
-    """Scrape from ALL sources in parallel and combine results.
-    
-    Previous behavior: Stop at first source that meets threshold.
-    New behavior: Try all sources to maximize pain point discovery.
-    
-    Returns (comments, primary_source) where primary_source indicates which
-    scraper provided the bulk of the data.
+# =============================================================================
+# MAIN AGENT FUNCTION
+# =============================================================================
+
+
+def run(state: VentureForgeState) -> Dict[str, Any]:
     """
-    all_comments: list[ScrapedComment] = []
-    source_counts: dict[DataSource, int] = {
-        DataSource.HACKERNEWS: 0,
-        DataSource.PRODUCTHUNT: 0,
-        DataSource.WEB: 0,
-        DataSource.YOUTUBE: 0,
-    }
+    Main pain point miner agent function.
 
-    # --- Source 1: Hacker News (no API key required) ---
-    logger.info("[pain_point_miner] Scraping Hacker News (no API key required)")
+    Args:
+        state: Current pipeline state
+
+    Returns:
+        State patch dictionary
+    """
+    logger.info(f"[pain_point_miner] Starting for domain: {state.domain}")
+
+    max_pain_points = state.max_pain_points or MAX_PAIN_POINTS_DEFAULT
+
+    # Step 1: Scrape from all sources
     try:
-        hn_comments = hn_scrape_for_domain(domain, max_total_comments=_MAX_TOTAL_COMMENTS)
-        if hn_comments:
-            logger.info(f"[pain_point_miner] Hacker News returned {len(hn_comments)} comments")
-            all_comments.extend(hn_comments)
-            source_counts[DataSource.HACKERNEWS] = len(hn_comments)
+        comments = scrape_all_sources(state.domain, MAX_TOTAL_COMMENTS)
     except Exception as e:
-        logger.warning(f"[pain_point_miner] Hacker News scraper failed: {e}")
-
-    # --- Source 2: Product Hunt (API key optional, has fallback) ---
-    logger.info("[pain_point_miner] Scraping Product Hunt")
-    try:
-        ph_comments = ph_scrape_for_domain(domain, max_total_comments=_MAX_TOTAL_COMMENTS)
-        if ph_comments:
-            logger.info(f"[pain_point_miner] Product Hunt returned {len(ph_comments)} comments")
-            all_comments.extend(ph_comments)
-            source_counts[DataSource.PRODUCTHUNT] = len(ph_comments)
-    except Exception as e:
-        logger.warning(f"[pain_point_miner] Product Hunt scraper failed: {e}")
-
-    # --- Source 3: Tavily web content search (DISABLED to reduce LLM context load) ---
-    # Tavily was contributing 200+ content chunks, significantly increasing token usage
-    # The pipeline works well with just HN + PH + YouTube (3 sources)
-    # logger.info("[pain_point_miner] Scraping Tavily web content")
-    # try:
-    #     web_comments = tavily_content_scrape_for_domain(domain, max_total_comments=_MAX_TOTAL_COMMENTS)
-    #     if web_comments:
-    #         logger.info(f"[pain_point_miner] Tavily web search returned {len(web_comments)} content chunks")
-    #         all_comments.extend(web_comments)
-    #         source_counts[DataSource.WEB] = len(web_comments)
-    # except Exception as e:
-    #     logger.warning(f"[pain_point_miner] Tavily web content scraper failed: {e}")
-
-    # --- Source 4: YouTube comments (requires YOUTUBE_API_KEY) ---
-    logger.info("[pain_point_miner] Scraping YouTube comments")
-    try:
-        youtube_comments = youtube_scrape_for_domain(domain, max_total_comments=_MAX_TOTAL_COMMENTS)
-        if youtube_comments:
-            logger.info(f"[pain_point_miner] YouTube returned {len(youtube_comments)} comments")
-            all_comments.extend(youtube_comments)
-            source_counts[DataSource.YOUTUBE] = len(youtube_comments)
-    except Exception as e:
-        logger.warning(f"[pain_point_miner] YouTube scraper failed: {e}")
-
-    # --- Reddit scraper removed ---
-    # Reddit API has SSL certificate issues in WSL and slow retry loops.
-    # Tavily scraper disabled to reduce LLM context load (was 200+ chunks).
-    # The system works well with HN + PH + YouTube (3 sources).
-
-    # Determine primary source (most comments contributed)
-    if not all_comments:
-        logger.warning("[pain_point_miner] All scrapers returned zero comments")
-        return [], DataSource.HACKERNEWS  # default fallback
-    
-    primary = max(source_counts, key=source_counts.get)
-    logger.info(
-        f"[pain_point_miner] Combined {len(all_comments)} comments from all sources. "
-        f"Breakdown: HN={source_counts[DataSource.HACKERNEWS]}, "
-        f"PH={source_counts[DataSource.PRODUCTHUNT]}, "
-        f"Web={source_counts[DataSource.WEB]}, "
-        f"YouTube={source_counts[DataSource.YOUTUBE]}. "
-        f"Primary source: {primary.value}"
-    )
-    
-    return all_comments, primary
-
-
-# ------------------------------------------------------------------
-# Main entry point
-# ------------------------------------------------------------------
-def run(state: VentureForgeState) -> dict:
-    """Entry point called by the LangGraph orchestrator."""
-    domain = state.domain
-    max_pp = state.max_pain_points or _MAX_PAIN_POINTS_DEFAULT
-    threshold = int(max_pp * _TAVILY_FALLBACK_RATIO)
-
-    # If revision feedback exists, we may already have comments cached —
-    # but today we re-scrape every run (deterministic, simple).
-    comments, primary_source = _scrape_all_sources(domain)
-    logger.info(
-        f"[pain_point_miner] domain='{domain}' → {len(comments)} comments "
-        f"from all sources (threshold={threshold}, primary={primary_source})"
-    )
+        logger.error(f"[pain_point_miner] Scraping failed: {e}")
+        return {
+            "pain_points": [],
+            **state.add_event(
+                agent="pain_point_miner",
+                stage=PipelineStage.MINING,
+                kind="error",
+                message=f"Scraping failed: {e}",
+            ),
+        }
 
     if not comments:
-        logger.warning("[pain_point_miner] zero comments scraped — returning empty")
-        patch = {
+        logger.warning(f"[pain_point_miner] No comments found for domain: {state.domain}")
+        return {
             "pain_points": [],
-            "current_stage": PipelineStage.MINING,
-            "next_node": "orchestrator",
-        }
-        patch.update(
-            state.add_event(
+            **state.add_event(
                 agent="pain_point_miner",
                 stage=PipelineStage.MINING,
                 kind="warning",
-                message=f"No comments scraped from any source for domain '{domain}'.",
-            )
+                message=f"No comments found for domain: {state.domain}",
+            ),
+        }
+
+    # Step 2: Normalize comments
+    normalized_comments = normalize_comments(comments)
+
+    # Step 3: Call LLM to extract pain points
+    try:
+        response_content = call_llm_for_pain_points(
+            domain=state.domain,
+            max_pain_points=max_pain_points,
+            comments=normalized_comments,
+            revision_feedback=state.revision_feedback,
         )
-        return patch
+    except LLMError as e:
+        logger.error(f"[pain_point_miner] LLM call failed: {e}")
+        return {
+            "pain_points": [],
+            **state.add_event(
+                agent="pain_point_miner",
+                stage=PipelineStage.MINING,
+                kind="error",
+                message=f"LLM call failed: {e}",
+            ),
+        }
 
-    # --- Step 1: LLM extraction ---
-    extracted = _llm_extract_pain_points(state, comments)
-    logger.info(f"[pain_point_miner] LLM extracted {len(extracted)} raw pain points")
+    # Step 4: Parse LLM response
+    try:
+        raw_pain_points = parse_llm_response(response_content)
+    except LLMJSONParseError as e:
+        logger.error(f"[pain_point_miner] JSON parsing failed: {e}")
+        return {
+            "pain_points": [],
+            **state.add_event(
+                agent="pain_point_miner",
+                stage=PipelineStage.MINING,
+                kind="error",
+                message=f"JSON parsing failed: {e}",
+            ),
+        }
 
-    # --- Step 2: Code validation (exact quotes + quality filters) ---
-    validated = _validate_pain_points(extracted, comments)
-    logger.info(f"[pain_point_miner] {len(validated)}/{len(extracted)} passed code validation")
+    # Step 5: Convert to PainPoint objects
+    pain_points = convert_to_pain_points(raw_pain_points)
 
-    # --- Step 3: Cap to max_pain_points ---
-    final = validated[:max_pp]
+    # Step 6: Validate pain points
+    validated_pain_points = validate_pain_points(pain_points)
 
-    # --- Step 4: Append mode — preserve existing pain points during retries/revisions ---
+    logger.info(
+        f"[pain_point_miner] Extracted {len(validated_pain_points)} valid pain points"
+    )
+
+    # Step 7: Cap to max_pain_points
+    final = validated_pain_points[:max_pain_points]
+
+    # Step 8: Append mode — preserve existing pain points during retries/revisions
     # This prevents losing good work when LLM fails to extract new pain points
     if state.pain_points:
         # Append mode: keep existing pain points and add new ones
@@ -416,25 +582,22 @@ def run(state: VentureForgeState) -> dict:
         new_pps = [pp for pp in final if pp.title.lower() not in existing_titles]
         combined = state.pain_points + new_pps
         # Cap to max_pain_points
-        final = combined[:max_pp]
+        final = combined[:max_pain_points]
         logger.info(
             f"[pain_point_miner] After deduplication: {len(new_pps)} new, "
-            f"{len(final)} total (capped at {max_pp})"
+            f"{len(final)} total (capped at {max_pain_points})"
         )
 
-    patch = {
+    return {
         "pain_points": final,
         "next_node": "orchestrator",
-    }
-    patch.update(
-        state.add_event(
+        **state.add_event(
             agent="pain_point_miner",
             stage=PipelineStage.MINING,
             kind="info",
             message=(
                 f"Scraped {len(comments)} comments from all sources "
-                f"(HN, PH, YouTube) → {len(final)} validated pain points for domain '{domain}'."
+                f"→ {len(final)} validated pain points for domain '{state.domain}'."
             ),
-        )
-    )
-    return patch
+        ),
+    }

@@ -8,7 +8,7 @@ Role:
 
 Inputs:
 - pitch_brief: single pitch brief from pitch_writer
-- pain_points: array of pain points for evidence verification
+- pain_points: array of pain points with evidence_urls for evidence verification
 - scored_idea: scorer output for this same idea, for cross-reference
 - current_revision_count: integer (0 or 1)
 
@@ -43,7 +43,7 @@ Required reasoning_trace:
 Before filling the rubric, write a short reasoning_trace that explicitly checks:
 - how many words are in the tagline
 - how many distinct source URLs are in evidence_links (must be at least 2)
-- whether every evidence_links URL appears in pain_points evidence array
+- whether every evidence_links URL appears in pain_points[].evidence_urls array
 - whether the target user is a contained, reachable community
 - whether competitive_landscape.current_behavior is specific and concrete (not generic)
 - whether competitive_landscape.real_enemy identifies a specific habit to break
@@ -65,6 +65,7 @@ If the pitch makes broad unsupported claims, this is false.
 
 2. no_hallucinated_source_urls = true if:
 - every URL in pitch_brief.evidence_links appears in at least one pain_point's evidence array
+- YouTube comment URLs (containing &lc=) are valid if they exist in pain_points
 - if even one URL is invented or mismatched, this is false
 
 3. tagline_under_12_words = true if:

@@ -360,6 +360,39 @@ def format_critiques(state) -> str:
     return "".join(output)
 
 
+def format_logs(state) -> str:
+    """Format pipeline events as logs for display."""
+    if not state or not state.events:
+        return "No logs yet. Start a pipeline to see logs."
+    
+    output = []
+    for event in state.events:
+        # Format timestamp
+        timestamp = event.timestamp.strftime("%H:%M:%S") if hasattr(event, 'timestamp') else "N/A"
+        
+        # Emoji for event kind
+        kind_emoji = {
+            "info": "ℹ️",
+            "warning": "⚠️",
+            "error": "❌",
+            "success": "✅",
+        }.get(event.kind, "📝")
+        
+        # Format stage
+        stage = event.stage.value if hasattr(event.stage, 'value') else str(event.stage)
+        
+        # Build log line
+        log_line = f"[{timestamp}] {kind_emoji} [{event.agent.upper()}] [{stage.upper()}] {event.message}"
+        
+        # Add idea_id if present
+        if hasattr(event, 'idea_id') and event.idea_id:
+            log_line += f" (idea: {str(event.idea_id)[:8]}...)"
+        
+        output.append(log_line)
+    
+    return "\n".join(output)
+
+
 def export_json(state) -> str:
     """Export state as JSON."""
     if state is None:
@@ -418,7 +451,7 @@ def start_pipeline(
     ideas_per_run: int,
     top_n_pitches: int,
     max_revisions: int,
-) -> tuple[str, str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, str, str]:
     """Start the pipeline and return initial UI state."""
     try:
         run_id = start_run(
@@ -443,6 +476,7 @@ def start_pipeline(
                 "Initializing...",
                 "Initializing...",
                 "Initializing...",
+                "Initializing...",
                 f"✅ Pipeline started successfully! Run ID: {run_id}",
             )
 
@@ -454,6 +488,7 @@ def start_pipeline(
             format_scored_ideas(state),
             format_pitches(state),
             format_critiques(state),
+            format_logs(state),
             f"✅ Pipeline started successfully! Run ID: {run_id}",
         )
     except Exception as e:
@@ -467,10 +502,11 @@ def start_pipeline(
             error_msg,
             error_msg,
             error_msg,
+            error_msg,
         )
 
 
-def update_progress(run_id: str) -> tuple[str, str, str, str, str, str]:
+def update_progress(run_id: str) -> tuple[str, str, str, str, str, str, str]:
     """Poll for state updates and return new UI state with notifications."""
     global _previous_stage
     
@@ -509,6 +545,7 @@ def update_progress(run_id: str) -> tuple[str, str, str, str, str, str]:
         format_scored_ideas(state),
         format_pitches(state),
         format_critiques(state),
+        format_logs(state),
     )
 
 
@@ -663,6 +700,15 @@ def create_ui() -> gr.Blocks:
 
             with gr.TabItem("🔍 Critiques"):
                 critiques_display = gr.Markdown("No critiques yet")
+            
+            with gr.TabItem("📋 Logs"):
+                logs_display = gr.Textbox(
+                    label="Pipeline Logs",
+                    lines=20,
+                    max_lines=50,
+                    interactive=False,
+                )
+                refresh_logs_btn = gr.Button("🔄 Refresh Logs", variant="secondary")
 
             with gr.TabItem("📥 Export"):
                 with gr.Row():
@@ -696,6 +742,7 @@ def create_ui() -> gr.Blocks:
                 scored_ideas_display,
                 pitches_display,
                 critiques_display,
+                logs_display,
                 status_message,
             ],
         )
@@ -724,7 +771,15 @@ def create_ui() -> gr.Blocks:
                 scored_ideas_display,
                 pitches_display,
                 critiques_display,
+                logs_display,
             ],
+        )
+        
+        # Manual refresh logs button
+        refresh_logs_btn.click(
+            fn=lambda rid: format_logs(poll_state(rid)),
+            inputs=[run_id_display],
+            outputs=[logs_display],
         )
 
         export_json_btn.click(

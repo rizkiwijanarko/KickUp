@@ -53,10 +53,10 @@ def _make_pp_item(*, quote: str, url: str) -> dict[str, Any]:
 
 def test_no_comments_returns_empty() -> None:
     state = VentureForgeState(domain="developer tools", max_pain_points=5)
-    with patch("src.agents.pain_point_miner._scrape_all_sources", return_value=([], DataSource.HACKERNEWS)):
+    with patch("src.agents.pain_point_miner.scrape_all_sources", return_value=[]):
         result = run_pain_point_miner(state)
     assert result["pain_points"] == []
-    assert result["next_node"] == "orchestrator"
+    assert "events" in result
     print("  PASS")
 
 

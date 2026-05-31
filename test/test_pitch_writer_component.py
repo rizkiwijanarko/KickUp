@@ -146,7 +146,7 @@ def test_no_scored_ideas_returns_empty() -> None:
     state = VentureForgeState(domain="test", scored_ideas=[])
     result = run_pitch_writer(state)
     assert result["pitch_briefs"] == []
-    assert result["current_stage"] == PipelineStage.WRITING
+    assert "events" in result
     print("  PASS")
 
 

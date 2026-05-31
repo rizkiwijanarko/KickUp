@@ -419,7 +419,7 @@ class TestOrchestration:
             assert patch["next_node"] == state.critique.target_agent
 
             # Test reset_for_revision (clears downstream data AND critique)
-            reset_patch = state.reset_for_revision(state.critique.target_agent)
+            reset_patch = state.reset_for_revision(state.critique.target_agent, state.critique.idea_id)
             assert "critique" in reset_patch, "Should clear critique"
             assert reset_patch["critique"] is None
             assert "current_stage" in reset_patch

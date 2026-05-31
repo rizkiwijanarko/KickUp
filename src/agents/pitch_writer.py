@@ -1,13 +1,22 @@
-"""Pitch Writer — writes investor-ready one-page pitch briefs for top ideas."""
+"""
+Pitch Writer — writes investor-ready one-page pitch briefs for top ideas.
+
+REFACTORED: Following clean code principles with extracted helper functions.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import time
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.llm.client import extract_json, get_llm
+from src.constants import MAX_PITCH_GENERATION_ATTEMPTS
+from src.exceptions import LLMError, LLMJSONParseError
+from src.llm.client import get_llm, get_structured_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
     CompetitiveLandscape,
@@ -20,139 +29,86 @@ from src.state.schema import (
 logger = logging.getLogger(__name__)
 
 
-def _build_system_prompt() -> str:
-    """Load compressed pitch writer prompt to reduce token usage."""
-    from pathlib import Path
-    
-    compressed_path = Path(__file__).parent.parent.parent / "agent_prompts" / "pitch_writer_prompt_compressed.txt"
-    
+# =============================================================================
+# PROMPT BUILDING
+# =============================================================================
+
+
+def load_system_prompt() -> str:
+    """
+    Load compressed pitch writer prompt to reduce token usage.
+
+    Returns:
+        System prompt content
+    """
+    compressed_path = (
+        Path(__file__).parent.parent.parent
+        / "agent_prompts"
+        / "pitch_writer_prompt_compressed.txt"
+    )
+
     if compressed_path.exists():
         with open(compressed_path, "r", encoding="utf-8") as f:
             return f.read()
     else:
-        logger.warning("[pitch_writer] Compressed prompt not found, using original")
+        logger.warning(
+            "[pitch_writer] Compressed prompt not found, using original"
+        )
         return get_prompt("pitch_writer")
 
 
-def _build_user_prompt(state: VentureForgeState) -> str:
-    # If we're in revision mode for a specific idea, only write that pitch
-    if state.current_revision_idea_id:
-        # Find the specific scored idea being revised
-        target_scored = next(
-            (s for s in state.scored_ideas if s.idea_id == state.current_revision_idea_id),
-            None
-        )
-        if not target_scored:
-            # Fallback to top ideas if we can't find the specific one
-            top_ideas = state.top_scored_ideas
-        else:
-            top_ideas = [target_scored]
-    else:
-        top_ideas = state.top_scored_ideas
-    
-    # FIX #1: Validate that we have ideas to write briefs for
-    if not top_ideas:
-        logger.warning("[pitch_writer] No top scored ideas available for writing pitch briefs")
-        return ""  # Will be handled by run() function
-    
-    ideas_map = {str(idea.id): idea for idea in state.ideas}
-
-    scored_blobs = []
-    for s in top_ideas:
-        idea = ideas_map.get(str(s.idea_id))
-        if not idea:
-            continue
-        scored_blobs.append({
-            "idea_id": str(s.idea_id),
-            "title": idea.title,
-            "one_liner": idea.one_liner,
-            "problem": idea.problem,
-            "solution": idea.solution,
-            "target_user": idea.target_user,
-            "key_features": idea.key_features,
-            "yes_count": s.yes_count,
-            "core_assumption": s.core_assumption,
-            "fatal_flaws": [f.model_dump() for f in s.fatal_flaws],
-            "one_risk": s.one_risk,
-        })
-
-    # Sort pain points by evidence count (descending) to prioritize well-validated pain points
-    sorted_pps = sorted(
-        state.filtered_pain_points,
-        key=lambda pp: len(pp.evidence),
-        reverse=True
-    )
-    pp_blobs = [
-        {
-            "id": str(pp.id),
-            "title": pp.title,
-            "description": pp.description,
-            "evidence": [
-                {
-                    "source_url": ev.source_url,
-                    "raw_quote": ev.raw_quote,
-                    "source": ev.source.value,
-                }
-                for ev in pp.evidence
-            ],
-            "evidence_count": len(pp.evidence),
-        }
-        for pp in sorted_pps
-    ]
-
-    feedback = state.revision_feedback or "None"
-
-    # If revision feedback exists and the Critic targeted the
-    # pitch_writer, we want the LLM to explicitly fix the failing
-    # rubric checks (tagline length, unscalable_acquisition_concrete,
-    # gtm_leads_with_manual_recruitment) without changing the core
-    # idea or evidence.
-    revision_block = ""
-    if state.revision_feedback:
-        # Optionally, look at the most recent critique for extra
-        # context, if available.
-        last_crit = state.critiques[-1] if state.critiques else None
-        failing = ", ".join(last_crit.failing_checks) if last_crit else "(see feedback)"
-        revision_block = (
-            "THIS IS A REVISION ROUND for the pitch briefs. The critic "
-            "flagged issues in the pitch writing (e.g., tagline length, "
-            "unscalable acquisition, or go-to-market style). You MUST "
-            "fix the following before returning new briefs:\n"  # noqa: E501
-            f"- Critic failing checks: {failing}\n"
-            f"- Critic feedback: {feedback}\n\n"
-            "Do NOT change the underlying idea, evidence_links, or core "
-            "assumptions. Only rewrite the pitch fields (tagline, "
-            "go_to_market, business_model, etc.) so that they satisfy the "
-            "rubric while staying truthful to the evidence.\n\n"
-        )
-
-    user_text = (
-        f"Domain: {state.domain}\n\n"
-        f"SCORED IDEAS (Top {len(scored_blobs)}):\n{json.dumps(scored_blobs, indent=2)}\n\n"
-        f"SUPPORTING PAIN POINTS:\n{json.dumps(pp_blobs, indent=2)}\n\n"
-        f"{revision_block}"
-        "Write full pitch briefs for these ideas. Return a JSON array of pitch briefs."
-    )
-    return user_text
-
-
-def _build_user_prompt_single(state: VentureForgeState, scored_idea) -> str:
-    """Build prompt for a SINGLE idea to enhance focus and reduce tokens.
-    
-    Generates one brief at a time for:
-    - Better fit within vLLM 2048 token limit
-    - More comprehensive, detailed briefs  
-    - LLM can focus deeply on each idea
+def build_system_prompt() -> str:
     """
-    ideas_map = {str(idea.id): idea for idea in state.ideas}
-    idea = ideas_map.get(str(scored_idea.idea_id))
-    
-    if not idea:
-        logger.warning(f"[pitch_writer] Could not find idea {scored_idea.idea_id}")
-        return ""
-    
-    # Build scored idea blob for this single idea
-    scored_blob = {
+    Build complete system prompt.
+
+    Returns:
+        Complete system prompt
+    """
+    base_prompt = load_system_prompt()
+    # No JSON instruction needed - structured output handles this
+    return base_prompt
+
+
+def get_target_ideas(state: VentureForgeState) -> List[Any]:
+    """
+    Get the list of ideas to write briefs for.
+
+    If in revision mode, returns only the idea being revised.
+    Otherwise, returns all top scored ideas.
+
+    Args:
+        state: Current pipeline state
+
+    Returns:
+        List of scored ideas to write briefs for
+    """
+    if state.current_revision_idea_id:
+        target_scored = next(
+            (
+                s
+                for s in state.scored_ideas
+                if s.idea_id == state.current_revision_idea_id
+            ),
+            None,
+        )
+        if target_scored:
+            return [target_scored]
+
+    return state.top_scored_ideas
+
+
+def serialize_scored_idea(scored_idea: Any, idea: Any) -> Dict[str, Any]:
+    """
+    Serialize a scored idea to dict format for prompt.
+
+    Args:
+        scored_idea: Scored idea object
+        idea: Original idea object
+
+    Returns:
+        Serialized scored idea dictionary
+    """
+    return {
         "idea_id": str(scored_idea.idea_id),
         "title": idea.title,
         "one_liner": idea.one_liner,
@@ -165,302 +121,534 @@ def _build_user_prompt_single(state: VentureForgeState, scored_idea) -> str:
         "fatal_flaws": [f.model_dump() for f in scored_idea.fatal_flaws],
         "one_risk": scored_idea.one_risk,
     }
-    
-    # Filter pain points to only those addressed by THIS idea
+
+
+def serialize_pain_point(pain_point: Any, max_evidence: int = 2) -> Dict[str, Any]:
+    """
+    Serialize a pain point to dict format for prompt.
+
+    Args:
+        pain_point: Pain point object
+        max_evidence: Maximum evidence items to include
+
+    Returns:
+        Serialized pain point dictionary
+    """
+    return {
+        "id": str(pain_point.id),
+        "title": pain_point.title,
+        "description": pain_point.description,
+        "evidence": [
+            {
+                "source_url": ev.source_url,
+                "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
+                "source": ev.source.value,
+            }
+            for ev in pain_point.evidence[:max_evidence]
+        ],
+        "evidence_count": len(pain_point.evidence),
+    }
+
+
+def get_relevant_pain_points(
+    state: VentureForgeState,
+    idea: Any,
+    max_pain_points: int = 4,
+) -> List[Any]:
+    """
+    Get pain points relevant to a specific idea.
+
+    Args:
+        state: Current pipeline state
+        idea: Idea to get pain points for
+        max_pain_points: Maximum pain points to return
+
+    Returns:
+        List of relevant pain points, sorted by evidence count
+    """
     relevant_pp_ids = set(idea.addresses_pain_point_ids)
     relevant_pps = [
-        pp for pp in state.filtered_pain_points
+        pp
+        for pp in state.filtered_pain_points
         if pp.id in relevant_pp_ids
     ]
-    
-    # Sort by evidence count
-    sorted_pps = sorted(relevant_pps, key=lambda pp: len(pp.evidence), reverse=True)
-    
-    # Limit evidence items per pain point to top 2
-    pp_blobs = [
-        {
-            "id": str(pp.id),
-            "title": pp.title,
-            "description": pp.description,
-            "evidence": [
-                {
-                    "source_url": ev.source_url,
-                    "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
-                    "source": ev.source.value,
-                }
-                for ev in pp.evidence[:2]  # Only top 2 evidence items
-            ],
-            "evidence_count": len(pp.evidence),
-        }
-        for pp in sorted_pps[:4]  # Max 4 pain points
-    ]
-    
-    feedback = state.revision_feedback or "None"
-    
-    # Revision block if applicable
-    revision_block = ""
-    if state.revision_feedback:
-        last_crit = state.critiques[-1] if state.critiques else None
-        failing = ", ".join(last_crit.failing_checks) if last_crit else "(see feedback)"
-        revision_block = (
-            "THIS IS A REVISION ROUND. The critic flagged issues. You MUST fix:\n"
-            f"- Failing checks: {failing}\n"
-            f"- Feedback: {feedback}\n\n"
-            "Do NOT change the idea, evidence_links, or core assumptions. "
-            "Only rewrite pitch fields to satisfy the rubric.\n\n"
+
+    # Sort by evidence count (descending)
+    sorted_pps = sorted(
+        relevant_pps,
+        key=lambda pp: len(pp.evidence),
+        reverse=True,
+    )
+
+    return sorted_pps[:max_pain_points]
+
+
+def build_revision_block(state: VentureForgeState) -> str:
+    """
+    Build revision instruction block if in revision mode.
+
+    Args:
+        state: Current pipeline state
+
+    Returns:
+        Revision instruction text, or empty string if not in revision
+    """
+    if not state.revision_feedback:
+        return ""
+
+    last_critique = state.critiques[-1] if state.critiques else None
+    failing_checks = (
+        ", ".join(last_critique.failing_checks)
+        if last_critique
+        else "(see feedback)"
+    )
+
+    return (
+        "THIS IS A REVISION ROUND for the pitch briefs. The critic flagged specific issues. "
+        "You MUST address ONLY the failing checks mentioned. "
+        "DO NOT change dimensions that were previously passing - preserve them exactly.\n"
+        f"- Failing checks: {failing_checks}\n"
+        f"- Feedback: {state.revision_feedback}\n\n"
+        "CRITICAL: Only fix the specific issues mentioned. "
+        "If tagline was passing before, keep it unchanged. "
+        "If target_user was passing before, keep it unchanged. "
+        "If evidence_links were passing before, keep them unchanged. "
+        "Make minimal, surgical changes to address only the failing checks.\n\n"
+    )
+
+
+def build_user_prompt_single(
+    state: VentureForgeState,
+    scored_idea: Any,
+) -> str:
+    """
+    Build user prompt for a SINGLE idea.
+
+    Generates one brief at a time for better focus and token efficiency.
+
+    Args:
+        state: Current pipeline state
+        scored_idea: Scored idea to write brief for
+
+    Returns:
+        Formatted user prompt
+    """
+    ideas_map = {str(idea.id): idea for idea in state.ideas}
+    idea = ideas_map.get(str(scored_idea.idea_id))
+
+    if not idea:
+        logger.warning(
+            f"[pitch_writer] Could not find idea {scored_idea.idea_id}"
         )
-    
-    user_text = (
+        return ""
+
+    # Serialize scored idea
+    scored_blob = serialize_scored_idea(scored_idea, idea)
+
+    # Get relevant pain points
+    relevant_pps = get_relevant_pain_points(state, idea)
+    pp_blobs = [serialize_pain_point(pp) for pp in relevant_pps]
+
+    # Build revision block if applicable
+    revision_block = build_revision_block(state)
+
+    return (
         f"Domain: {state.domain}\n\n"
         f"SCORED IDEA:\n{json.dumps(scored_blob, indent=2)}\n\n"
         f"SUPPORTING PAIN POINTS:\n{json.dumps(pp_blobs, indent=2)}\n\n"
         f"{revision_block}"
-        "Write a full pitch brief for this idea. Return a single JSON object (not an array)."
+        "Write a full pitch brief for this idea. "
+        "Return a single JSON object (not an array)."
     )
-    return user_text
 
 
-def _invoke_llm_single(state: VentureForgeState, scored_idea, retry_count: int = 0) -> dict | None:
-    """Invoke LLM to generate a SINGLE pitch brief.
-    
+# =============================================================================
+# LLM INTERACTION
+# =============================================================================
+
+
+def call_llm_for_pitch(
+    state: VentureForgeState,
+    scored_idea: Any,
+    retry_count: int = 0,
+) -> Optional[PitchBrief]:
+    """
+    Call LLM to generate a single pitch brief using structured output.
+
     Args:
         state: Current pipeline state
-        scored_idea: The scored idea to write a brief for
+        scored_idea: Scored idea to write brief for
         retry_count: Current retry attempt (0-indexed)
-    
+
     Returns:
-        Raw pitch brief dict, or None on failure
+        PitchBrief object, or None on failure
     """
-    llm = get_llm(temperature=0.6, max_tokens=16384, reasoning=False)
-    
-    system_prompt = _build_system_prompt()
-    system_prompt += "\n\n**CRITICAL: Output ONLY a single JSON object. No markdown fences, no explanations. Start with { and end with }.**"
-    
+    llm = get_structured_llm(
+        PitchBrief,
+        temperature=0.6,
+        reasoning=False,
+    )
+
     messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=_build_user_prompt_single(state, scored_idea)),
+        SystemMessage(content=build_system_prompt()),
+        HumanMessage(content=build_user_prompt_single(state, scored_idea)),
     ]
-    
-    start = time.monotonic()
+
+    start_time = time.monotonic()
     try:
-        raw = llm.invoke(messages)
-        content = raw.content if hasattr(raw, "content") else str(raw)
+        response = llm.invoke(messages)
+        # response is already a PitchBrief object from structured output
     except Exception as e:
-        logger.error(f"[pitch_writer] LLM invocation failed for idea {scored_idea.idea_id} (attempt {retry_count + 1}): {e}")
-        return None
-    
-    elapsed = time.monotonic() - start
-    logger.info(f"[pitch_writer] LLM responded in {elapsed:.1f}s for idea {scored_idea.idea_id} (attempt {retry_count + 1})")
-    
-    # Warn if response looks truncated
-    if content and not content.rstrip().endswith('}'):
-        logger.warning(
-            f"[pitch_writer] Response may be truncated for idea {scored_idea.idea_id}. "
-            f"Last 100 chars: {content[-100:]}"
-        )
-    
-    parsed = extract_json(content)
-    if parsed is None:
         logger.error(
-            f"[pitch_writer] JSON extraction failed for idea {scored_idea.idea_id} (attempt {retry_count + 1}). "
-            f"Response length: {len(content)} chars"
+            f"[pitch_writer] LLM invocation failed for idea {scored_idea.idea_id} "
+            f"(attempt {retry_count + 1}): {e}"
         )
-        logger.error(f"[pitch_writer] Response preview: {content[:500]}")
         return None
-    
-    # Handle both dict and wrapped dict formats
-    if isinstance(parsed, dict):
-        if "pitch_briefs" in parsed and isinstance(parsed["pitch_briefs"], list):
-            return parsed["pitch_briefs"][0] if parsed["pitch_briefs"] else None
-        return parsed
-    
+
+    elapsed = time.monotonic() - start_time
+    logger.info(
+        f"[pitch_writer] LLM responded in {elapsed:.1f}s for idea "
+        f"{scored_idea.idea_id} (attempt {retry_count + 1})"
+    )
+
+    return response
+
+
+def parse_pitch_response(
+    pitch_brief: Optional[PitchBrief],
+    idea_id: UUID,
+    retry_count: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """
+    Validate and convert PitchBrief object to dict format.
+
+    Args:
+        pitch_brief: PitchBrief object from structured output
+        idea_id: ID of the idea being pitched
+        retry_count: Current retry attempt
+
+    Returns:
+        Pitch brief dict, or None on validation failure
+    """
+    if pitch_brief is None:
+        logger.error(
+            f"[pitch_writer] No pitch brief returned for idea {idea_id} "
+            f"(attempt {retry_count + 1})"
+        )
+        return None
+
+    # Convert to dict for downstream processing
+    pitch_dict = pitch_brief.model_dump()
+
+    # Validate that pitch_dict has meaningful content (not placeholders)
+    # Check for placeholder text in markdown_content
+    markdown = pitch_dict.get("markdown_content", "")
+    if markdown and len(markdown) < 100:
+        logger.warning(
+            f"[pitch_writer] Rejected pitch with insufficient markdown_content "
+            f"({len(markdown)} chars < 100 minimum) for idea {idea_id}"
+        )
+        return None
+
+    # Check for placeholder text
+    placeholder_patterns = ["full one-page brief", "placeholder", "tbd", "to be determined"]
+    if any(pattern.lower() in markdown.lower() for pattern in placeholder_patterns):
+        logger.warning(
+            f"[pitch_writer] Rejected pitch with placeholder text in markdown_content for idea {idea_id}"
+        )
+        return None
+
+    # Check for all empty fields (indicates LLM failure)
+    required_fields = ["title", "problem", "solution", "target_user", "market_opportunity"]
+    empty_count = sum(1 for field in required_fields if not pitch_dict.get(field) or len(str(pitch_dict.get(field, "")).strip()) < 3)
+    if empty_count >= len(required_fields) - 1:  # Allow at most 1 field to be empty
+        logger.warning(
+            f"[pitch_writer] Rejected pitch with {empty_count}/{len(required_fields)} empty required fields for idea {idea_id}"
+        )
+        return None
+
+    return pitch_dict
+
+
+def generate_pitch_with_retry(
+    state: VentureForgeState,
+    scored_idea: Any,
+    max_attempts: int = MAX_PITCH_GENERATION_ATTEMPTS,
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate pitch brief with retry logic.
+
+    Args:
+        state: Current pipeline state
+        scored_idea: Scored idea to write brief for
+        max_attempts: Maximum retry attempts
+
+    Returns:
+        Pitch brief dict, or None if all attempts fail
+    """
+    for attempt in range(max_attempts):
+        # Call LLM
+        pitch_brief = call_llm_for_pitch(state, scored_idea, retry_count=attempt)
+        if pitch_brief is None:
+            continue
+
+        # Validate and convert to dict
+        pitch_dict = parse_pitch_response(
+            pitch_brief,
+            scored_idea.idea_id,
+            retry_count=attempt,
+        )
+
+        if pitch_dict is not None:
+            return pitch_dict
+
+        logger.warning(
+            f"[pitch_writer] Attempt {attempt + 1}/{max_attempts} failed "
+            f"for idea {scored_idea.idea_id}"
+        )
+
+    logger.error(
+        f"[pitch_writer] All {max_attempts} attempts failed for idea "
+        f"{scored_idea.idea_id}"
+    )
     return None
 
 
-def _invoke_llm(state: VentureForgeState, retry_count: int = 0) -> list[dict]:
-    """Invoke LLM to generate pitch briefs with retry logic.
-    
-    Args:
-        state: Current pipeline state
-        retry_count: Current retry attempt (0-indexed)
-    
-    Returns:
-        List of raw pitch brief dicts, or empty list on failure
-    """
-    # Pitch briefs are long (~6K tokens per brief x 3 briefs = ~18K tokens)
-    # Increase max_tokens to 16384 to avoid truncation for 3 full briefs
-    # FIX #6: Increase temperature from 0.4 to 0.6 for more creative pitch writing
-    llm = get_llm(temperature=0.6, max_tokens=16384, reasoning=False)
-    
-    # Add explicit JSON-only instruction
-    system_prompt = _build_system_prompt()
-    system_prompt += "\n\n**CRITICAL: Output ONLY the JSON array. No markdown code fences, no explanations, no preamble. Start with [ and end with ].**"
-    
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=_build_user_prompt(state)),
-    ]
-
-    start = time.monotonic()
-    try:
-        raw = llm.invoke(messages)
-        content = raw.content if hasattr(raw, "content") else str(raw)
-    except Exception as e:
-        logger.error(f"[pitch_writer] LLM invocation failed (attempt {retry_count + 1}): {e}")
-        return []
-
-    elapsed = time.monotonic() - start
-    logger.info(f"[pitch_writer] LLM responded in {elapsed:.1f}s (attempt {retry_count + 1})")
-    
-    # Debug: log response preview and check for truncation
-    logger.info(f"[pitch_writer] Response preview (first 500 chars): {content[:500]}")
-    logger.info(f"[pitch_writer] Response length: {len(content)} chars")
-    
-    # Warn if response looks truncated (doesn't end with ] or })
-    if content and not content.rstrip().endswith((']', '}')):
-        logger.warning(
-            f"[pitch_writer] Response may be truncated (doesn't end with ] or }}). "
-            f"Last 100 chars: {content[-100:]}"
-        )
-
-    parsed = extract_json(content)
-    if parsed is None:
-        logger.error(
-            f"[pitch_writer] JSON extraction failed (attempt {retry_count + 1}). "
-            f"Response length: {len(content)} chars"
-        )
-        logger.error(f"[pitch_writer] Full response (first 2000 chars): {content[:2000]}")
-        logger.error(f"[pitch_writer] Full response (last 500 chars): {content[-500:]}")
-        
-        # Log specific failure reason for debugging
-        if len(content) == 0:
-            logger.error("[pitch_writer] Failure reason: Empty response from LLM")
-        elif not content.rstrip().endswith((']', '}')):
-            logger.error("[pitch_writer] Failure reason: Response truncated (incomplete JSON)")
-        else:
-            logger.error("[pitch_writer] Failure reason: Invalid JSON syntax")
-        
-        return []
-
-    if isinstance(parsed, dict) and "pitch_briefs" in parsed:
-        return parsed["pitch_briefs"]
-    return parsed if isinstance(parsed, list) else []
+# =============================================================================
+# PITCH BRIEF CONVERSION
+# =============================================================================
 
 
-def _collect_evidence_urls(idea_id: str, state: VentureForgeState) -> list[str]:
+def collect_evidence_urls(idea_id: UUID, state: VentureForgeState) -> List[str]:
     """
     Collect all evidence URLs from pain points referenced by this idea.
     Fallback for when LLM fails to provide evidence_links.
+
+    Args:
+        idea_id: ID of the idea
+        state: Current pipeline state
+
+    Returns:
+        List of evidence URLs from relevant pain points
     """
     urls = []
     idea = next((i for i in state.ideas if str(i.id) == str(idea_id)), None)
     if not idea:
         return urls
-    
-    # FIX #2: Use filtered_pain_points instead of pain_points
+
+    # Use filtered_pain_points instead of pain_points
     for pp_id in idea.addresses_pain_point_ids:
         pp = next((p for p in state.filtered_pain_points if str(p.id) == str(pp_id)), None)
         if pp and hasattr(pp, 'evidence') and pp.evidence:
             for ev in pp.evidence:
                 if ev.source_url and ev.source_url not in urls:
                     urls.append(ev.source_url)
-    
+
+    logger.info(
+        f"[pitch_writer] Collected {len(urls)} evidence URLs from pain points for idea {idea_id}: {urls[:5]}..."
+    )
     return urls
 
 
-def run(state: VentureForgeState) -> dict:
-    if not state.scored_ideas:
-        logger.warning("[pitch_writer] no scored ideas to write briefs for")
-        patch = {
-            "pitch_briefs": [],
-            "current_stage": PipelineStage.WRITING,
-            "next_node": "orchestrator",
-            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
-        }
-        patch.update(
-            state.add_event(
-                agent="pitch_writer",
-                stage=PipelineStage.WRITING,
-                kind="warning",
-                message="No scored ideas available for writing pitch briefs.",
-            )
-        )
-        return patch
+def validate_evidence_links(
+    evidence_links: List[str],
+    idea_id: UUID,
+    state: VentureForgeState,
+) -> List[str]:
+    """
+    Validate evidence links against pain point evidence URLs.
     
-    # FIX #1: Check if top_scored_ideas is empty (all ideas are "park")
-    if not state.top_scored_ideas:
-        logger.warning("[pitch_writer] all scored ideas have 'park' verdict, no briefs to write")
-        patch = {
-            "pitch_briefs": [],
-            "current_stage": PipelineStage.WRITING,
-            "next_node": "orchestrator",
-            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
-        }
-        patch.update(
-            state.add_event(
-                agent="pitch_writer",
-                stage=PipelineStage.WRITING,
-                kind="warning",
-                message="All scored ideas have 'park' verdict. No pitch briefs to write.",
-            )
+    Filters out any URLs that don't exist in the pain points' evidence arrays.
+    This prevents the LLM from hallucinating or modifying URLs.
+    
+    If no valid URLs remain after filtering, falls back to collecting URLs
+    from pain points directly.
+    
+    Args:
+        evidence_links: List of URLs from LLM response
+        idea_id: ID of the idea
+        state: Current pipeline state
+        
+    Returns:
+        Filtered list of valid URLs that exist in pain points
+    """
+    # Get the idea to find its pain point IDs
+    idea = next((i for i in state.ideas if i.id == idea_id), None)
+    if not idea:
+        logger.warning(f"[pitch_writer] Could not find idea {idea_id} for evidence validation")
+        return evidence_links
+    
+    # Collect all valid URLs from relevant pain points
+    valid_urls = set()
+    for pp in state.filtered_pain_points:
+        if pp.id in idea.addresses_pain_point_ids:
+            for ev in pp.evidence:
+                valid_urls.add(ev.source_url)
+    
+    # Filter evidence_links to only include valid URLs
+    validated_links = [url for url in evidence_links if url in valid_urls]
+    
+    # Log if we filtered out any URLs
+    if len(validated_links) < len(evidence_links):
+        invalid_urls = set(evidence_links) - set(validated_links)
+        logger.warning(
+            f"[pitch_writer] Filtered out {len(invalid_urls)} hallucinated URLs for idea {idea_id}: "
+            f"{invalid_urls}"
         )
-        return patch
+        logger.info(
+            f"[pitch_writer] Kept {len(validated_links)} valid URLs from pain points"
+        )
+    
+    # Fallback: if no valid URLs after filtering, collect from pain points directly
+    if not validated_links:
+        logger.warning(
+            f"[pitch_writer] No valid evidence links from LLM for idea {idea_id}. "
+            f"Falling back to collecting URLs from pain points."
+        )
+        validated_links = collect_evidence_urls(idea_id, state)
+        logger.info(
+            f"[pitch_writer] Collected {len(validated_links)} URLs from pain points for idea {idea_id}"
+        )
+    
+    return validated_links
 
-    # ONE-BRIEF-AT-A-TIME GENERATION
-    # Generate briefs one at a time for better token efficiency and comprehensiveness
-    MAX_RETRIES = 3
-    
-    # Determine which ideas to write briefs for
-    if state.current_revision_idea_id:
-        # Revision mode: only write brief for the specific idea being revised
-        target_scored = next(
-            (s for s in state.scored_ideas if s.idea_id == state.current_revision_idea_id),
-            None
+
+def convert_to_pitch_brief(
+    pitch_dict: Dict[str, Any],
+    idea_id: UUID,
+    state: VentureForgeState,
+) -> Optional[PitchBrief]:
+    """
+    Convert raw pitch dict to PitchBrief object.
+
+    Args:
+        pitch_dict: Raw pitch brief dictionary
+        idea_id: ID of the idea
+        state: Current pipeline state (for revision_count lookup)
+
+    Returns:
+        PitchBrief object, or None on conversion failure
+    """
+    try:
+        # Parse nested objects
+        competitive_landscape = None
+        if "competitive_landscape" in pitch_dict:
+            comp_data = pitch_dict["competitive_landscape"]
+            if isinstance(comp_data, dict):
+                competitive_landscape = CompetitiveLandscape(**comp_data)
+
+        validation_plan = None
+        if "validation_plan" in pitch_dict:
+            val_data = pitch_dict["validation_plan"]
+            if isinstance(val_data, dict):
+                validation_plan = ValidationPlan(**val_data)
+
+        # Coerce list fields to strings (LLM sometimes returns lists)
+        def coerce_to_string(value: Any) -> str:
+            if isinstance(value, list):
+                return " ".join(str(item) for item in value)
+            return str(value) if value else ""
+
+        # Get revision count from state
+        revision_count = state.revision_counts.get(str(idea_id), 0)
+        
+        # Validate evidence links against pain point URLs
+        raw_evidence_links = pitch_dict.get("evidence_links", [])
+        validated_evidence_links = validate_evidence_links(raw_evidence_links, idea_id, state)
+
+        # Get idea title as fallback for empty pitch title
+        idea_title = ""
+        idea = next((i for i in state.ideas if i.id == idea_id), None)
+        if idea:
+            idea_title = idea.title
+
+        # Create PitchBrief with correct field names matching schema
+        return PitchBrief(
+            idea_id=idea_id,
+            title=pitch_dict.get("title", "") or idea_title,
+            tagline=pitch_dict.get("tagline", ""),
+            problem=pitch_dict.get("problem", ""),
+            solution=pitch_dict.get("solution", ""),
+            target_user=pitch_dict.get("target_user", ""),
+            market_opportunity=pitch_dict.get("market_opportunity", ""),
+            competitive_landscape=competitive_landscape,
+            differentiation=pitch_dict.get("differentiation", ""),
+            validation_plan=validation_plan,
+            business_model=pitch_dict.get("business_model", ""),
+            go_to_market=pitch_dict.get("go_to_market", ""),
+            key_risk=pitch_dict.get("key_risk", ""),
+            next_steps=coerce_to_string(pitch_dict.get("next_steps", "")),
+            evidence_links=validated_evidence_links,
+            markdown_content=pitch_dict.get("markdown_content", ""),
+            revision_count=revision_count,
         )
-        ideas_to_write = [target_scored] if target_scored else []
-        logger.info(f"[pitch_writer] Revision mode: writing brief for idea {state.current_revision_idea_id}")
-    else:
-        # Initial generation: write briefs for all top scored ideas
-        ideas_to_write = state.top_scored_ideas
-        logger.info(f"[pitch_writer] Initial generation: writing {len(ideas_to_write)} briefs")
-    
-    raw_briefs = []
-    
-    # Generate one brief at a time
-    for scored_idea in ideas_to_write:
-        logger.info(f"[pitch_writer] Generating brief for idea {scored_idea.idea_id}: {scored_idea.idea_id}")
-        
-        raw_brief = None
-        for retry in range(MAX_RETRIES):
-            raw_brief = _invoke_llm_single(state, scored_idea, retry_count=retry)
+
+    except Exception as e:
+        logger.error(
+            f"[pitch_writer] Failed to convert pitch dict to PitchBrief "
+            f"for idea {idea_id}: {e}"
+        )
+        return None
+
+
+# =============================================================================
+# MAIN AGENT FUNCTION
+# =============================================================================
+
+
+def run(state: VentureForgeState) -> Dict[str, Any]:
+    """
+    Main pitch writer agent function.
+
+    Args:
+        state: Current pipeline state
+
+    Returns:
+        State patch dictionary
+    """
+    logger.info("[pitch_writer] Starting pitch brief generation")
+
+    # Get target ideas
+    target_ideas = get_target_ideas(state)
+
+    if not target_ideas:
+        logger.warning("[pitch_writer] No top scored ideas available")
+        return {
+            "pitch_briefs": [],
+            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+            **state.add_event(
+                agent="pitch_writer",
+                stage=PipelineStage.WRITING,
+                kind="warning",
+                message="No top scored ideas available for pitch writing",
+            ),
+        }
+
+    # Generate pitch briefs one at a time
+    pitch_briefs: List[PitchBrief] = []
+    failed_ideas: List[UUID] = []
+
+    for scored_idea in target_ideas:
+        logger.info(
+            f"[pitch_writer] Generating brief for idea {scored_idea.idea_id}"
+        )
+
+        # Generate pitch with retry
+        pitch_dict = generate_pitch_with_retry(state, scored_idea)
+
+        if pitch_dict is None:
+            failed_ideas.append(scored_idea.idea_id)
             
-            if raw_brief:
-                logger.info(f"[pitch_writer] Successfully generated brief for idea {scored_idea.idea_id} on attempt {retry + 1}")
-                raw_briefs.append(raw_brief)
-                break
-            
-            if retry < MAX_RETRIES - 1:
+            # If in revision mode and failed, remove the brief to prevent infinite loop
+            if state.current_revision_idea_id:
                 logger.warning(
-                    f"[pitch_writer] Attempt {retry + 1}/{MAX_RETRIES} failed for idea {scored_idea.idea_id}. Retrying..."
+                    f"[pitch_writer] Revision failed for idea {state.current_revision_idea_id} after {MAX_PITCH_GENERATION_ATTEMPTS} attempts. "
+                    f"Removing brief to prevent infinite revision loop."
                 )
-            else:
-                logger.error(
-                    f"[pitch_writer] All {MAX_RETRIES} attempts failed for idea {scored_idea.idea_id}."
-                )
-        
-        # If in revision mode and failed, keep the old brief
-        if not raw_brief and state.current_revision_idea_id:
-            logger.warning(
-                f"[pitch_writer] Revision failed for idea {state.current_revision_idea_id}. "
-                f"Keeping existing brief."
-            )
-            existing_brief = next(
-                (b for b in state.pitch_briefs if b.idea_id == state.current_revision_idea_id),
-                None
-            )
-            if existing_brief:
+                # Remove the failed brief from pitch_briefs
+                filtered_briefs = [b for b in state.pitch_briefs if b.idea_id != state.current_revision_idea_id]
                 patch = {
-                    "pitch_briefs": state.pitch_briefs,
+                    "pitch_briefs": filtered_briefs,
                     "current_revision_idea_id": None,
                     "next_node": "orchestrator",
                     "pitch_writer_attempts": state.pitch_writer_attempts + 1,
@@ -470,109 +658,72 @@ def run(state: VentureForgeState) -> dict:
                         agent="pitch_writer",
                         stage=PipelineStage.WRITING,
                         kind="error",
-                        message=f"Failed to revise pitch brief for idea {state.current_revision_idea_id} after {MAX_RETRIES} attempts. Keeping original brief.",
-                        idea_id=state.current_revision_idea_id,
+                        message=f"Failed to revise pitch brief for idea {state.current_revision_idea_id} after {MAX_PITCH_GENERATION_ATTEMPTS} attempts. Removed brief to prevent infinite loop.",
+                        idea_id=str(state.current_revision_idea_id),
                     )
                 )
                 return patch
-    
-    # If no briefs generated at all
-    if not raw_briefs:
-        logger.error("[pitch_writer] Failed to generate any briefs after all retries")
-        patch = {
-            "pitch_briefs": [],
-            "current_stage": PipelineStage.WRITING,
-            "next_node": "orchestrator",
-            "pitch_writer_attempts": state.pitch_writer_attempts + 1,
-        }
-        patch.update(
-            state.add_event(
-                agent="pitch_writer",
-                stage=PipelineStage.WRITING,
-                kind="error",
-                message=f"Failed to generate pitch briefs after {MAX_RETRIES} attempts.",
-            )
-        )
-        return patch
-
-    briefs: list[PitchBrief] = []
-
-    for raw in raw_briefs:
-        try:
-            # Parse nested competitive_landscape
-            comp_landscape_raw = raw.get("competitive_landscape", {})
-            competitive_landscape = CompetitiveLandscape(
-                current_behavior=comp_landscape_raw.get("current_behavior", ""),
-                direct_competitors=comp_landscape_raw.get("direct_competitors", ""),
-                real_enemy=comp_landscape_raw.get("real_enemy", "")
-            )
             
-            # Parse nested validation_plan
-            val_plan_raw = raw.get("validation_plan", {})
-            validation_plan = ValidationPlan(
-                discovery_questions=val_plan_raw.get("discovery_questions", []),
-                validation_criteria=val_plan_raw.get("validation_criteria", "")
-            )
-            
-            brief = PitchBrief(
-                idea_id=raw["idea_id"],
-                title=raw["title"],
-                tagline=raw["tagline"],
-                problem=raw["problem"],
-                solution=raw["solution"],
-                target_user=raw["target_user"],
-                market_opportunity=raw["market_opportunity"],
-                competitive_landscape=competitive_landscape,
-                differentiation=raw.get("differentiation", ""),
-                validation_plan=validation_plan,
-                business_model=raw["business_model"],
-                go_to_market=raw["go_to_market"],
-                key_risk=raw["key_risk"],
-                next_steps="\n".join(raw["next_steps"]) if isinstance(raw["next_steps"], list) else raw["next_steps"],
-                evidence_links=raw.get("evidence_links", []),
-                markdown_content=raw["markdown_content"],
-                revision_count=state.get_revision_count(raw["idea_id"]),
-            )
-            
-            # Validate and fix evidence_links
-            if not brief.evidence_links or len(brief.evidence_links) < 2:
-                logger.warning(
-                    f"[pitch_writer] LLM provided {len(brief.evidence_links)} evidence links for idea {brief.idea_id}, "
-                    "collecting from pain points"
-                )
-                collected_urls = _collect_evidence_urls(brief.idea_id, state)
-                if collected_urls:
-                    brief.evidence_links = collected_urls
-                    logger.info(
-                        f"[pitch_writer] Collected {len(collected_urls)} evidence URLs from pain points for idea {brief.idea_id}"
-                    )
-            
-            briefs.append(brief)
-        except Exception as e:
-            logger.warning(f"[pitch_writer] skipping malformed pitch brief: {e}")
             continue
 
-    # Merge with existing briefs if in revision mode
-    if state.current_revision_idea_id:
-        # FIX #5: Deduplicate by idea_id (new brief replaces old)
-        existing_ids = {b.idea_id for b in briefs}
-        all_briefs = [b for b in state.pitch_briefs if b.idea_id not in existing_ids] + briefs
-    else:
-        # Initial generation: replace all briefs
-        all_briefs = briefs
+        # Convert to PitchBrief object
+        pitch_brief = convert_to_pitch_brief(pitch_dict, scored_idea.idea_id, state)
 
-    patch = {
-        "pitch_briefs": all_briefs,
-        "current_revision_idea_id": None,  # Clear revision flag
-        "next_node": "orchestrator",
+        if pitch_brief is None:
+            failed_ideas.append(scored_idea.idea_id)
+            
+            # If in revision mode and conversion failed, remove the brief to prevent infinite loop
+            if state.current_revision_idea_id:
+                logger.warning(
+                    f"[pitch_writer] Conversion failed for idea {state.current_revision_idea_id} in revision mode. "
+                    f"Removing brief to prevent infinite revision loop."
+                )
+                # Remove the failed brief from pitch_briefs
+                filtered_briefs = [b for b in state.pitch_briefs if b.idea_id != state.current_revision_idea_id]
+                patch = {
+                    "pitch_briefs": filtered_briefs,
+                    "current_revision_idea_id": None,
+                    "next_node": "orchestrator",
+                    "pitch_writer_attempts": state.pitch_writer_attempts + 1,
+                }
+                patch.update(
+                    state.add_event(
+                        agent="pitch_writer",
+                        stage=PipelineStage.WRITING,
+                        kind="error",
+                        message=f"Failed to convert pitch brief for idea {state.current_revision_idea_id}. Removed brief to prevent infinite loop.",
+                        idea_id=str(state.current_revision_idea_id),
+                    )
+                )
+                return patch
+            
+            continue
+
+        pitch_briefs.append(pitch_brief)
+
+    # Log results
+    logger.info(
+        f"[pitch_writer] Generated {len(pitch_briefs)} pitch briefs "
+        f"({len(failed_ideas)} failed)"
+    )
+
+    if failed_ideas:
+        logger.warning(
+            f"[pitch_writer] Failed to generate briefs for ideas: {failed_ideas}"
+        )
+
+    return {
+        "pitch_briefs": pitch_briefs,
         "pitch_writer_attempts": state.pitch_writer_attempts + 1,
-    }
-    patch.update(
-        state.add_event(
+        "current_revision_idea_id": None,
+        "next_node": "orchestrator",
+        **state.add_event(
             agent="pitch_writer",
             stage=PipelineStage.WRITING,
-            kind="info",
-            message=f"Wrote {len(briefs)} pitch briefs for top scored ideas.",
-        )
-    )
-    return patch
+            kind="info" if pitch_briefs else "error",
+            message=(
+                f"Generated {len(pitch_briefs)} pitch briefs "
+                f"({len(failed_ideas)} failed)"
+            ),
+        ),
+    }

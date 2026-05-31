@@ -222,7 +222,7 @@ def _make_malformed_critic_response() -> str:
 
 def test_auto_approve_at_max_revisions() -> None:
     """If revision_counts[idea_id] >= max_revisions, auto-approve with special status."""
-    with patch("src.llm.client.get_llm") as mock_get_llm:
+    with patch("src.agents.critic.get_llm") as mock_get_llm:
         # Mock LLM to return a failing critique with only positioning issues
         fake_llm = MagicMock()
         fake_response = MagicMock()
