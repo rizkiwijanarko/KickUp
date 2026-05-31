@@ -21,7 +21,7 @@ VentureForge is a **hierarchical multi-agent system** that automates startup ide
 3. **Generates startup ideas** that address multiple pain points
 4. **Evaluates ideas** using binary yes/no rubrics (Paul Graham framework)
 5. **Writes pitch briefs** with competitive intelligence and validation plans
-6. **Critiques outputs** with adversarial review and reflection loop (max 3 revisions)
+6. **Critiques outputs** with adversarial review and reflection loop (max 2 revisions, configurable)
 
 **Key Innovation:** All evaluation uses **binary yes/no checks** instead of subjective 0-1 scores, making results reproducible and auditable.
 
@@ -112,16 +112,28 @@ uv sync
 Create a `.env` file (copy from `.env.example`):
 
 ```bash
-# Required for development
-OPENROUTER_API_KEY=your_key_here
+# LLM Provider (choose one)
+# Option 1: OpenAI-compatible (gpt-4o-mini, etc.)
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=your_openai_key_here
+LLM_MODEL=gpt-4o-mini
+
+# Option 2: OpenRouter
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=your_openrouter_key_here
+LLM_MODEL=anthropic/claude-3.5-sonnet
+
+# Option 3: AMD vLLM (Qwen3.6)
+LLM_BASE_URL=http://your-vllm-server:8000/v1
+LLM_API_KEY=your_key_here
+LLM_MODEL=Qwen/Qwen3.6-35B-A3B
 
 # Optional (enhances pain point mining)
 PRODUCTHUNT_API_KEY=your_key_here
 YOUTUBE_API_KEY=your_key_here
-
-# Required for AMD vLLM production
-LLM_BASE_URL=http://134.199.205.81:8000/v1
-LLM_MODEL=Qwen/Qwen3.6-35B-A3B
+TAVILY_API_KEY=your_key_here
+REDDIT_CLIENT_ID=your_client_id
+REDDIT_CLIENT_SECRET=your_client_secret
 ```
 
 ### Run
@@ -141,10 +153,9 @@ uv run python -m src.main --domain "developer tools" --output output.json
 | Layer | Tool |
 |-------|------|
 | Agent orchestration | LangGraph |
-| LLM (dev) | OpenRouter (any OpenAI-compatible) |
-| LLM (production) | Qwen/Qwen3.6-35B-A3B via vLLM on AMD MI300X |
-| Validation | Pydantic v2 |
-| State persistence | LangGraph SQLite checkpointer |
+| LLM | OpenAI-compatible (gpt-4o-mini, Qwen3.6, etc.) |
+| Validation | Pydantic v2 with structured output |
+| State persistence | LangGraph MemorySaver (in-memory) |
 | Web UI | Gradio |
 | Data sources | Hacker News, Product Hunt, YouTube Data API |
 
@@ -154,19 +165,23 @@ uv run python -m src.main --domain "developer tools" --output output.json
 
 | Key | Where to Get | Required? |
 |-----|-------------|-----------|
-| OPENROUTER_API_KEY | [openrouter.ai](https://openrouter.ai) | ✅ Yes (dev) |
+| LLM_BASE_URL / LLM_API_KEY | Your LLM provider (OpenAI, OpenRouter, vLLM) | ✅ Yes |
 | PRODUCTHUNT_API_KEY | [producthunt.com](https://www.producthunt.com/v2/oauth/applications) | ⚠️ Optional |
 | YOUTUBE_API_KEY | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) | ⚠️ Optional |
-| HF_TOKEN | [huggingface.co](https://huggingface.co/settings/tokens) | ✅ Yes (AMD) |
+| TAVILY_API_KEY | [tavily.com](https://tavily.com) | ⚠️ Optional |
+| REDDIT_CLIENT_ID / SECRET | [reddit.com](https://www.reddit.com/prefs/apps) | ⚠️ Optional |
+| HF_TOKEN | [huggingface.co](https://huggingface.co/settings/tokens) | ✅ Yes (AMD vLLM) |
 
 ---
 
 ## 🎯 Key Features
 
 - **Binary Rubric Evaluation:** All subjective evaluation uses yes/no checks (Scorer: 8 checks, Critic: 5 checks)
-- **Reflection Loop:** Critic enforces quality via adversarial review with up to 3 revisions
+- **Structured Output:** LLM responses use Pydantic v2 structured output for reliable schema validation
+- **Reflection Loop:** Critic enforces quality via adversarial review with up to 2 revisions (configurable)
 - **Evidence Validation:** Every pain point and pitch claim must cite a real source URL
 - **Multi-Source Clustering:** Pain points clustered from multiple sources with 1-10 evidence items each
+- **Provider Agnostic:** Works with any OpenAI-compatible LLM (gpt-4o-mini, Qwen3.6, Claude, etc.)
 
 ---
 
