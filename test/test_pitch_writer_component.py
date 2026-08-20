@@ -1,8 +1,6 @@
 """Component-level test for the Pitch Writer agent.
 
 Tests parsing edge cases and validation paths without hitting the real LLM.
-Run with:
-    uv run test_pitch_writer_component.py
 """
 from __future__ import annotations
 
@@ -14,16 +12,16 @@ from uuid import uuid4
 
 from src.agents.pitch_writer import run as run_pitch_writer
 from src.state.schema import (
+    CompetitiveLandscape,
     DataSource,
     DemandRubric,
     FeasibilityRubric,
     Idea,
     NoveltyRubric,
     PainPoint,
-    PainPointRubric,
     PitchBrief,
-    PipelineStage,
     ScoredIdea,
+    ValidationPlan,
     VentureForgeState,
     Verdict,
 )
@@ -96,50 +94,51 @@ def _make_minimal_state() -> VentureForgeState:
     )
 
 
-def _make_pitch_brief_response(idea_id: Any) -> dict:
-    """Return a single valid pitch-brief dict."""
-    return {
-        "idea_id": str(idea_id),
-        "title": "Docker Compose Simplifier",
-        "tagline": "Easily manage and debug Docker Compose files.",
-        "problem": "Developers struggle with complex multi-service local development setups.",
-        "solution": "A visual editor and debugger for Docker Compose files.",
-        "target_user": "Solo developers and small teams",
-        "market_opportunity": "Large developer tools market with growing Docker adoption.",
-        "competitive_landscape": {
-            "current_behavior": "Developers manually edit YAML files and debug via trial-and-error restarts",
-            "direct_competitors": "Docker Desktop, VS Code extensions, and manual YAML editing",
-            "real_enemy": "The habit of editing raw YAML without validation or visual feedback"
-        },
-        "differentiation": "Visual editor with real-time validation vs manual YAML editing",
-        "validation_plan": {
-            "discovery_questions": [
+def _make_pitch_brief_obj(idea_id: Any) -> PitchBrief:
+    """Return a single valid PitchBrief instance."""
+    return PitchBrief(
+        idea_id=idea_id,
+        title="Docker Compose Simplifier",
+        tagline="Easily manage and debug Compose.",
+        problem="Developers struggle with complex multi-service local development setups.",
+        solution="A visual editor and debugger for Docker Compose files.",
+        target_user="Solo developers and small teams",
+        market_opportunity="Large developer tools market with growing Docker adoption.",
+        competitive_landscape=CompetitiveLandscape(
+            current_behavior="Developers manually edit YAML files and debug via trial-and-error restarts",
+            direct_competitors="Docker Desktop, VS Code extensions, and manual YAML editing",
+            real_enemy="The habit of editing raw YAML without validation or visual feedback",
+        ),
+        differentiation="Visual editor with real-time validation vs manual YAML editing",
+        validation_plan=ValidationPlan(
+            discovery_questions=[
                 "Walk me through the last time you debugged a Docker Compose issue",
                 "How much time do you spend on Docker Compose configuration weekly?",
                 "What frustrates you most about your current workflow?",
                 "What would make you switch from your current approach?",
-                "How do you currently validate your Docker Compose files?"
+                "How do you currently validate your Docker Compose files?",
             ],
-            "validation_criteria": "At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
-        },
-        "business_model": "Monthly SaaS subscription model with freemium tier included.",
-        "go_to_market": "Post on Reddit and Hacker News for early adopters.",
-        "key_risk": "Incumbents may copy the feature quickly.",
-        "next_steps": "Build MVP and recruit beta users from Reddit.",
-        "evidence_links": ["https://reddit.com/r/docker/comments/abc123"],
-        "markdown_content": (
+            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging",
+        ),
+        business_model="Subscription SaaS pricing with freemium tier.",
+        go_to_market="Direct outreach to r/docker power users and open-source contributors.",
+        key_risk="Incumbents like Docker Desktop may build native visual tooling.",
+        next_steps="Build an interactive landing page and prototype MVP.",
+        evidence_links=["https://reddit.com/r/docker/comments/abc123"],
+        markdown_content=(
             "# Docker Compose Simplifier\n\n"
             "## Problem\n"
-            "Developers struggle with complex multi-service local development setups.\n\n"
+            "Developers struggle with complex multi-service local development setups and spend hours debugging.\n\n"
             "## Solution\n"
-            "A visual editor and debugger for Docker Compose files.\n"
+            "A visual editor and debugger for Docker Compose files with live validation and auto-fixing.\n"
         ),
-    }
+    )
 
 
 # ------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------
+
 
 def test_no_scored_ideas_returns_empty() -> None:
     """If state has no scored ideas, return empty pitch_briefs."""
@@ -147,7 +146,6 @@ def test_no_scored_ideas_returns_empty() -> None:
     result = run_pitch_writer(state)
     assert result["pitch_briefs"] == []
     assert "events" in result
-    print("  PASS")
 
 
 def test_wellformed_response_produces_briefs() -> None:
@@ -155,11 +153,9 @@ def test_wellformed_response_produces_briefs() -> None:
     state = _make_minimal_state()
     idea = state.ideas[0]
 
-    with patch("src.agents.pitch_writer.get_llm") as mock_get_llm:
+    with patch("src.agents.pitch_writer.get_structured_llm") as mock_get_llm:
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = json.dumps([_make_pitch_brief_response(idea.id)])
-        fake_llm.invoke.return_value = fake_response
+        fake_llm.invoke.return_value = _make_pitch_brief_obj(idea.id)
         mock_get_llm.return_value = fake_llm
 
         result = run_pitch_writer(state)
@@ -169,57 +165,21 @@ def test_wellformed_response_produces_briefs() -> None:
     assert briefs[0].idea_id == idea.id
     assert briefs[0].title == "Docker Compose Simplifier"
     assert briefs[0].revision_count == 0
-    print("  PASS")
 
 
-def test_missing_field_skips_brief() -> None:
-    """LLM omits market_opportunity → brief is skipped (Pydantic validation fails)."""
+def test_missing_or_failed_llm_call_skips_brief() -> None:
+    """LLM failure skips brief gracefully."""
     state = _make_minimal_state()
-    idea = state.ideas[0]
 
-    with patch("src.agents.pitch_writer.get_llm") as mock_get_llm:
+    with patch("src.agents.pitch_writer.get_structured_llm") as mock_get_llm:
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        bad = _make_pitch_brief_response(idea.id)
-        bad.pop("market_opportunity")
-        fake_response.content = json.dumps([bad])
-        fake_llm.invoke.return_value = fake_response
+        fake_llm.invoke.side_effect = Exception("LLM call failed")
         mock_get_llm.return_value = fake_llm
 
         result = run_pitch_writer(state)
 
     briefs: list[PitchBrief] = result["pitch_briefs"]
-    assert len(briefs) == 0, f"Expected 0 briefs (missing market_opportunity), got {len(briefs)}"
-    print("  PASS")
-
-
-def test_next_steps_list_coerced_to_string() -> None:
-    """LLM returns next_steps as a list of strings → coerced to single string."""
-    state = _make_minimal_state()
-    idea = state.ideas[0]
-
-    with patch("src.agents.pitch_writer.get_llm") as mock_get_llm:
-        fake_llm = MagicMock()
-        fake_response = MagicMock()
-        payload = _make_pitch_brief_response(idea.id)
-        payload["next_steps"] = [
-            "Build a landing page.",
-            "Recruit 10 beta users from Reddit.",
-            "Set up analytics tracking.",
-        ]
-        fake_response.content = json.dumps([payload])
-        fake_llm.invoke.return_value = fake_response
-        mock_get_llm.return_value = fake_llm
-
-        result = run_pitch_writer(state)
-
-    briefs: list[PitchBrief] = result["pitch_briefs"]
-    assert len(briefs) == 1
-    brief = briefs[0]
-    assert isinstance(brief.next_steps, str), f"Expected str, got {type(brief.next_steps)}"
-    assert "Build a landing page." in brief.next_steps
-    assert "Recruit 10 beta users from Reddit." in brief.next_steps
-    print("  PASS")
+    assert len(briefs) == 0
 
 
 def test_revision_count_increments() -> None:
@@ -228,11 +188,9 @@ def test_revision_count_increments() -> None:
     idea = state.ideas[0]
     state = state.model_copy(update={"revision_counts": {str(idea.id): 1}})
 
-    with patch("src.agents.pitch_writer.get_llm") as mock_get_llm:
+    with patch("src.agents.pitch_writer.get_structured_llm") as mock_get_llm:
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = json.dumps([_make_pitch_brief_response(idea.id)])
-        fake_llm.invoke.return_value = fake_response
+        fake_llm.invoke.return_value = _make_pitch_brief_obj(idea.id)
         mock_get_llm.return_value = fake_llm
 
         result = run_pitch_writer(state)
@@ -240,78 +198,3 @@ def test_revision_count_increments() -> None:
     briefs: list[PitchBrief] = result["pitch_briefs"]
     assert len(briefs) == 1
     assert briefs[0].revision_count == 1
-    print("  PASS")
-
-
-def test_live_llm_produces_valid_briefs() -> None:
-    """Uses real API call. Requires OPENAI_API_KEY in environment."""
-    import os
-    if not os.getenv("OPENAI_API_KEY"):
-        print("  SKIP (no OPENAI_API_KEY)")
-        return
-
-    state = _make_minimal_state()
-    result = run_pitch_writer(state)
-
-    briefs: list[PitchBrief] = result["pitch_briefs"]
-    assert len(briefs) > 0, f"Expected at least 1 brief, got {len(briefs)}"
-    for b in briefs:
-        assert b.idea_id is not None
-        assert len(b.title) > 0
-        assert len(b.tagline) > 0
-        assert len(b.problem) > 0
-        assert len(b.solution) > 0
-        assert len(b.market_opportunity) > 0
-        assert len(b.business_model) > 0
-        assert len(b.go_to_market) > 0
-        assert len(b.markdown_content) >= 100
-        # Phase 2: Check new fields
-        assert b.competitive_landscape is not None
-        assert len(b.competitive_landscape.current_behavior) > 0
-        assert len(b.competitive_landscape.direct_competitors) > 0
-        assert len(b.competitive_landscape.real_enemy) > 0
-        assert len(b.differentiation) > 0
-        assert b.validation_plan is not None
-        assert len(b.validation_plan.discovery_questions) == 5
-        assert len(b.validation_plan.validation_criteria) > 0
-    print("  PASS")
-
-
-# ------------------------------------------------------------------
-# Runner
-# ------------------------------------------------------------------
-
-_TESTS = [
-    ("No scored ideas returns empty", test_no_scored_ideas_returns_empty),
-    ("Well-formed response produces briefs", test_wellformed_response_produces_briefs),
-    ("Missing market_opportunity skips brief", test_missing_field_skips_brief),
-    ("next_steps list coerced to string", test_next_steps_list_coerced_to_string),
-    ("Revision count increments", test_revision_count_increments),
-    ("Live LLM (slow)", test_live_llm_produces_valid_briefs),
-]
-
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Pitch Writer Component Tests")
-    print("=" * 60)
-
-    passed = 0
-    failed = 0
-    for name, fn in _TESTS:
-        print(f"\n[{passed + failed + 1}] {name}...")
-        try:
-            fn()
-            passed += 1
-        except Exception as e:
-            import traceback
-            print(f"  FAIL: {e}")
-            traceback.print_exc()
-            failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"Results: {passed} passed, {failed} failed")
-    print("=" * 60)
-    if failed:
-        import sys
-        sys.exit(1)

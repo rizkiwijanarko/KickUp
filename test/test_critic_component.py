@@ -222,33 +222,35 @@ def _make_malformed_critic_response() -> str:
 
 def test_auto_approve_at_max_revisions() -> None:
     """If revision_counts[idea_id] >= max_revisions, auto-approve with special status."""
-    with patch("src.agents.critic.get_llm") as mock_get_llm:
+    with patch("src.agents.critic.get_structured_llm") as mock_get_llm:
         # Mock LLM to return a failing critique with only positioning issues
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = json.dumps({
-            "reasoning_trace": "Pitch has positioning issues but max revisions reached.",
-            "rubric": {
-                "all_claims_evidence_backed": True,
-                "no_hallucinated_source_urls": True,
-                "tagline_under_12_words": True,
-                "target_is_contained_fire": False,  # Positioning issue
-                "competition_embraced_with_thesis": False,  # Positioning issue
-                "minimum_evidence_sources": True,
-                "scorer_verdict_justified": True,
-                "validation_plan_complete": True,
-            },
-            "all_pass": False,
-            "approval_status": "revise",
-            "failing_checks": ["target_is_contained_fire", "competition_embraced_with_thesis"],
-            "target_agent": "idea_generator",
-            "revision_feedback": "Positioning issues but max revisions reached.",
-        })
-        fake_llm.invoke.return_value = fake_response
+        rubric = CritiqueRubric(
+            all_claims_evidence_backed=True,
+            no_hallucinated_source_urls=True,
+            tagline_under_12_words=True,
+            target_is_contained_fire=False,  # Positioning issue
+            competition_embraced_with_thesis=False,  # Positioning issue
+            minimum_evidence_sources=True,
+            scorer_verdict_justified=True,
+            validation_plan_complete=True,
+        )
+        critique_obj = Critique(
+            idea_id=uuid4(),
+            reasoning_trace="Pitch has positioning issues but max revisions reached.",
+            rubric=rubric,
+            all_pass=False,
+            approval_status="revise",
+            failing_checks=["target_is_contained_fire", "competition_embraced_with_thesis"],
+            target_agent="idea_generator",
+            revision_feedback="Positioning issues but max revisions reached.",
+        )
+        fake_llm.invoke.return_value = critique_obj
         mock_get_llm.return_value = fake_llm
 
         state = _make_minimal_state(max_revisions=2)
         idea_id = str(state.pitch_briefs[0].idea_id)
+        critique_obj.idea_id = state.pitch_briefs[0].idea_id
         state = state.model_copy(update={"revision_counts": {idea_id: 2}})
 
         result = run_critic(state)
@@ -273,14 +275,33 @@ def test_empty_pitch_briefs_returns_no_critique() -> None:
 
 def test_wellformed_llm_response_parsed_correctly() -> None:
     """Mock a perfect LLM response and ensure we get a valid Critique."""
-    with patch("src.agents.critic.get_llm") as mock_get_llm:
+    with patch("src.agents.critic.get_structured_llm") as mock_get_llm:
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = _make_wellformed_critic_response()
-        fake_llm.invoke.return_value = fake_response
+        rubric = CritiqueRubric(
+            all_claims_evidence_backed=True,
+            no_hallucinated_source_urls=True,
+            tagline_under_12_words=True,
+            target_is_contained_fire=False,
+            competition_embraced_with_thesis=False,
+            minimum_evidence_sources=False,
+            scorer_verdict_justified=True,
+            validation_plan_complete=True,
+        )
+        critique_mock = Critique(
+            idea_id=uuid4(),
+            reasoning_trace="Positioning and evidence issues.",
+            rubric=rubric,
+            all_pass=False,
+            approval_status="revise",
+            failing_checks=["target_is_contained_fire", "competition_embraced_with_thesis", "minimum_evidence_sources"],
+            target_agent="idea_generator",
+            revision_feedback="Target user is too broad and need more evidence sources.",
+        )
+        fake_llm.invoke.return_value = critique_mock
         mock_get_llm.return_value = fake_llm
 
         state = _make_minimal_state()
+        critique_mock.idea_id = state.pitch_briefs[0].idea_id
         result = run_critic(state)
 
         assert "critique" in result, f"Expected critique, got keys={list(result.keys())}"
@@ -297,12 +318,10 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
 
 
 def test_malformed_response_returns_empty_dict() -> None:
-    """Missing required fields (target_agent, revision_feedback) should be caught."""
-    with patch("src.agents.critic.get_llm") as mock_get_llm:
+    """Exception or parsing error should return no critique and keep stage."""
+    with patch("src.agents.critic.get_structured_llm") as mock_get_llm:
         fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = _make_malformed_critic_response()
-        fake_llm.invoke.return_value = fake_response
+        fake_llm.invoke.side_effect = Exception("Malformed schema from LLM")
         mock_get_llm.return_value = fake_llm
 
         state = _make_minimal_state()
@@ -310,51 +329,6 @@ def test_malformed_response_returns_empty_dict() -> None:
 
         assert "critique" not in result, "Should not return malformed critique"
         assert result["current_stage"] == PipelineStage.CRITIQUING
-        print("  PASS")
-
-
-def test_list_revision_feedback_coerced_to_string() -> None:
-    """LLM sometimes returns revision_feedback as a list of strings."""
-    with patch("src.agents.critic.get_llm") as mock_get_llm:
-        fake_llm = MagicMock()
-        fake_response = MagicMock()
-        payload = json.loads(_make_wellformed_critic_response())
-        payload["revision_feedback"] = [
-            "Target user is too broad.",
-            "Name a specific community.",
-        ]
-        fake_response.content = json.dumps(payload)
-        fake_llm.invoke.return_value = fake_response
-        mock_get_llm.return_value = fake_llm
-
-        state = _make_minimal_state()
-        result = run_critic(state)
-
-        assert "critique" in result
-        critique: Critique = result["critique"]
-        assert isinstance(critique.revision_feedback, str), f"Expected str, got {type(critique.revision_feedback)}"
-        assert "Target user is too broad." in critique.revision_feedback
-        assert "Name a specific community." in critique.revision_feedback
-        print("  PASS")
-
-
-def test_wrapped_critique_object_unwrapped() -> None:
-    """If LLM returns {"critique": {...}}, extract inner object."""
-    with patch("src.agents.critic.get_llm") as mock_get_llm:
-        fake_llm = MagicMock()
-        fake_response = MagicMock()
-        fake_response.content = json.dumps(
-            {"critique": json.loads(_make_wellformed_critic_response())}
-        )
-        fake_llm.invoke.return_value = fake_response
-        mock_get_llm.return_value = fake_llm
-
-        state = _make_minimal_state()
-        result = run_critic(state)
-
-        assert "critique" in result
-        assert result["critique"].approval_status == "revise"
-        assert result["critique"].target_agent == "idea_generator"
         print("  PASS")
 
 
@@ -395,8 +369,6 @@ _TESTS = [
     ("Empty pitch briefs", test_empty_pitch_briefs_returns_no_critique),
     ("Mocked well-formed LLM response", test_wellformed_llm_response_parsed_correctly),
     ("Mocked malformed LLM response", test_malformed_response_returns_empty_dict),
-    ("List revision_feedback coercion", test_list_revision_feedback_coerced_to_string),
-    ("Wrapped critique object unwrapped", test_wrapped_critique_object_unwrapped),
     ("Live LLM (slow)", test_live_llm_produces_valid_critique),
 ]
 

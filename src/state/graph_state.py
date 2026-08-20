@@ -214,7 +214,6 @@ class VentureForgeState(BaseModel):
         """Return a state patch recording a revision."""
         patch: dict[str, Any] = {
             "critiques": self.critiques + [critique],
-            "critique": critique,
             "revision_feedback": critique.revision_feedback,
             "previous_stage": self.current_stage,
             "current_stage": PipelineStage.REVISING,

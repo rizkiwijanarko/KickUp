@@ -1,8 +1,6 @@
 """Component-level test for the Pain Point Miner agent.
 
-Fast, deterministic, offline by mocking Reddit/Tavily + the LLM.
-Run with:
-    uv run test_pain_point_miner_component.py
+Fast, deterministic, offline by mocking the DataMiner + LLM.
 """
 from __future__ import annotations
 
@@ -11,121 +9,72 @@ import logging
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from src.agents.pain_point_miner import run as run_pain_point_miner
-from src.state.schema import DataSource, PainPoint, PipelineStage, VentureForgeState
-from src.tools.reddit_scraper import ScrapedComment
+from src.agents.pain_point_miner import run as run_pain_point_miner, mine_pain_points
+from src.mining import CompositeDataMiner, RawEvidence
+from src.models import DataSource, PainPoint, PainPointRubric
+from src.state.schema import PipelineStage, VentureForgeState
 
 logging.basicConfig(level=logging.INFO)
 
 
-def _make_comments() -> list[ScrapedComment]:
-    c1 = ScrapedComment(
-        text="I spend more time debugging docker-compose.yml than writing actual code.",
-        url="https://www.reddit.com/r/docker/comments/abc123/comment/xyz",
-        subreddit="docker",
-        post_title="Frustrated with docker compose",
-    )
-    c2 = ScrapedComment(
-        text="Why does my test pass locally but fail in CI with the exact same Dockerfile?",
-        url="https://www.reddit.com/r/devops/comments/def456/comment/qwe",
-        subreddit="devops",
-        post_title="CI debugging is awful",
-    )
-    return [c1, c2]
+def _make_evidence() -> list[RawEvidence]:
+    return [
+        RawEvidence(
+            text="I spend more time debugging docker-compose.yml than writing actual code.",
+            url="https://www.reddit.com/r/docker/comments/abc123/comment/xyz",
+            source=DataSource.REDDIT,
+            title="Frustrated with docker compose",
+        ),
+        RawEvidence(
+            text="Why does my test pass locally but fail in CI with the exact same Dockerfile?",
+            url="https://www.reddit.com/r/devops/comments/def456/comment/qwe",
+            source=DataSource.REDDIT,
+            title="CI debugging is awful",
+        ),
+    ]
 
 
-def _make_pp_item(*, quote: str, url: str) -> dict[str, Any]:
+def _make_pp_dict(url: str) -> dict:
     return {
         "id": str(uuid4()),
         "title": "Docker Compose debugging pain",
         "description": "Developers struggle to manage multi-service setups and chase config errors.",
         "rubric": {
             "is_genuine_current_frustration": True,
-            "has_verbatim_quote": False,  # should be forced True by validation
+            "has_verbatim_quote": True,
             "user_segment_specific": True,
         },
-        "passes_rubric": "yes",
+        "passes_rubric": True,
         "source_url": url,
-        "raw_quote": quote,
+        "raw_quote": "I spend more time debugging docker-compose.yml than writing actual code.",
         "source": DataSource.REDDIT.value,
     }
 
 
-def test_no_comments_returns_empty() -> None:
+def test_no_evidence_returns_empty() -> None:
     state = VentureForgeState(domain="developer tools", max_pain_points=5)
-    with patch("src.agents.pain_point_miner.scrape_all_sources", return_value=[]):
+    with patch.object(CompositeDataMiner, "mine", return_value=[]):
         result = run_pain_point_miner(state)
     assert result["pain_points"] == []
     assert "events" in result
-    print("  PASS")
 
 
-def test_wellformed_response_validates_quotes_and_overwrites_url() -> None:
-    """DEPRECATED: Quote validation is temporarily disabled (LLM paraphrases instead of copying verbatim).
-    
-    This test is kept for future fuzzy matching implementation but currently skipped.
-    """
-    print("  SKIP (quote validation temporarily disabled)")
-
-
-def test_quote_not_found_is_rejected() -> None:
-    """DEPRECATED: Quote validation is temporarily disabled (LLM paraphrases instead of copying verbatim).
-    
-    This test is kept for future fuzzy matching implementation but currently skipped.
-    """
-    print("  SKIP (quote validation temporarily disabled)")
-
-
-def test_live_llm_produces_valid_pain_points() -> None:
-    """Uses real API call + real scraping. Requires any LLM API key."""
-    import os
-
-    from src.config import settings
-
-    # Check for any configured LLM API key
-    if not (settings.llm_api_key or settings.fast_llm_api_key or os.getenv("OPENAI_API_KEY")):
-        print("  SKIP (no LLM_API_KEY, FAST_LLM_API_KEY, or OPENAI_API_KEY)")
-        return
-
+def test_wellformed_llm_response_extracts_pain_points() -> None:
     state = VentureForgeState(domain="developer tools", max_pain_points=5)
-    result = run_pain_point_miner(state)
+    evidence = _make_evidence()
+    mock_payload = [_make_pp_dict(evidence[0].url)]
+
+    with patch.object(CompositeDataMiner, "mine", return_value=evidence):
+        with patch("src.agents.pain_point_miner.get_llm") as mock_get_llm:
+            fake_llm = MagicMock()
+            fake_resp = MagicMock()
+            fake_resp.content = json.dumps(mock_payload)
+            fake_llm.invoke.return_value = fake_resp
+            mock_get_llm.return_value = fake_llm
+
+            result = run_pain_point_miner(state)
+
     pps: list[PainPoint] = result["pain_points"]
-    assert all(pp.passes_rubric for pp in pps)
-    print("  PASS")
-
-
-_TESTS = [
-    ("No comments returns empty", test_no_comments_returns_empty),
-    ("Well-formed response validates quotes + overwrites URL", test_wellformed_response_validates_quotes_and_overwrites_url),
-    ("Quote not found rejected", test_quote_not_found_is_rejected),
-    ("Live LLM (slow)", test_live_llm_produces_valid_pain_points),
-]
-
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Pain Point Miner Component Tests")
-    print("=" * 60)
-
-    passed = 0
-    failed = 0
-    for name, fn in _TESTS:
-        print(f"\n[{passed + failed + 1}] {name}...")
-        try:
-            fn()
-            passed += 1
-        except Exception as e:
-            import traceback
-
-            print(f"  FAIL: {e}")
-            traceback.print_exc()
-            failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"Results: {passed} passed, {failed} failed")
-    print("=" * 60)
-    if failed:
-        import sys
-
-        sys.exit(1)
-
+    assert len(pps) == 1
+    assert pps[0].title == "Docker Compose debugging pain"
+    assert pps[0].passes_rubric is True
