@@ -139,14 +139,17 @@ def main() -> None:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
     print(f"\nPipeline finished in stage: {output.get('current_stage', 'unknown')}")
-    print(f"   Run ID     : {output.get('run_id', 'unknown')}")
-    print(f"   Duration   : {output.get('agent_timings', {})}")
-    print(f"   Pain points: {len(output.get('pain_points', []))}")
-    print(f"   Ideas      : {len(output.get('ideas', []))}")
-    print(f"   Pitches    : {len(output.get('pitch_briefs', []))}")
+    print(f"   Run ID          : {output.get('run_id', 'unknown')}")
+    print(f"   Duration        : {output.get('agent_timings', {})}")
+    print(f"   Pain points     : {len(output.get('pain_points', []))}")
+    print(f"   Ideas           : {len(output.get('ideas', []))}")
+    print(f"   Total Pitches   : {len(output.get('pitch_briefs', []))}")
+    print(f"   Approved Pitches: {len(output.get('approved_pitches', []))}")
+    if output.get('quarantined_pitches'):
+        print(f"   Quarantined     : {len(output.get('quarantined_pitches', []))} (failed rubric at max revisions)")
     revision_counts = output.get('revision_counts', {})
     total_revisions = sum(revision_counts.values())
-    print(f"   Revisions  : {total_revisions} (across {len(revision_counts)} pitches)")
+    print(f"   Revisions       : {total_revisions} (across {len(revision_counts)} pitches)")
     print(f"\nOutput written to: {args.output}")
 
 

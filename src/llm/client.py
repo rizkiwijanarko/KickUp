@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from functools import lru_cache
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
@@ -58,7 +59,7 @@ def get_llm(
         )
     
     # Base parameters
-    base_params = {
+    base_params: dict[str, Any] = {
         "base_url": config["base_url"],
         "api_key": config["api_key"] or "sk-dummy",
         "model": model_name,
@@ -66,6 +67,13 @@ def get_llm(
         "max_tokens": safe_max_tokens,
         "timeout": config["timeout"],
     }
+
+    # Add OpenRouter-specific headers if using OpenRouter
+    if "openrouter.ai" in config["base_url"].lower():
+        base_params["default_headers"] = {
+            "HTTP-Referer": "https://github.com/rizkiwijanarko/KickUp",
+            "X-Title": "VentureForge",
+        }
     
     # Add Qwen3.6-specific parameters if detected
     if is_qwen36:

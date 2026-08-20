@@ -7,6 +7,7 @@ VentureForge is a hierarchical LangGraph multi-agent pipeline that mines market 
 - **Ignored Directories**: Treat as non-existent: `.venv/`, `__pycache__/`, `.cache/`, `.mypy_cache/`, `.ruff_cache/`, `dist/`, `build/`, `*.egg-info/`.
 - **Pure State Transformers**: Never mutate `VentureForgeState` in-place. Agents must return patch dicts for `model_copy(update=...)`.
 - **Graph Specification**: Always keep `src/graph.py` synchronized with `orchestration.json`.
+- **Token Savior MCP Enforcement**: Always prioritize using `token-savior` MCP tools (`search_codebase`, `find_symbol`, `get_function_source`, `get_class_source`, `get_edit_context`, `replace_symbol_source`) over full-file views or blind grep to minimize context token usage.
 
 ## Development Commands
 
@@ -24,6 +25,7 @@ Read these specialized documents on demand when working in their area:
 
 - [Architecture & Graph](file:///docs/agents/architecture.md): LangGraph nodes, `VentureForgeState`, orchestrator routing, reflection loop.
 - [Environment & LLM Configuration](file:///docs/agents/environment.md): LLM provider switching, API keys, Hacker News/Reddit/Tavily data sources.
+- [Token Savior MCP](file:///docs/agents/token-savior.md): Symbol lookups, token-efficient navigation, and precision code modifications.
 - [Code Style & Types](file:///docs/agents/code-style.md): Python 3.11+, strict mypy types, Pydantic v2 models, prompt storage in `PROMPTS.md`.
 - [Testing Guidelines](file:///docs/agents/testing.md): Component vs E2E testing, pytest invocation patterns.
 - [Issue Tracker](file:///docs/agents/issue-tracker.md): GitHub Issues via `gh` CLI.

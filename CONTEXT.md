@@ -35,3 +35,15 @@ _Avoid_: Retry, rerun, loop
 **Data Miner**:
 The unified ingestion subsystem responsible for searching and extracting grounded evidence across external sources.
 _Avoid_: Scraper, crawler, harvester
+
+**Approved Pitch**:
+A Pitch Brief that has passed 100% of the binary Critic rubric checks and is certified ready for investor decks.
+_Avoid_: Validated pitch, winning pitch, final pitch
+
+**Quarantined Pitch**:
+A Pitch Brief that reached max revisions without satisfying all Critic rubric checks, preserved separately with attached flaw diagnostics for manual review.
+_Avoid_: Failed pitch, rejected brief, broken pitch
+
+**Ingestion SLA Budget**:
+The maximum bounded time window (default: 5.0 seconds) allocated for concurrent source providers to return evidence before mining synthesis proceeds.
+_Avoid_: Scrape timeout, network wait limit

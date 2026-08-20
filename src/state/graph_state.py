@@ -136,9 +136,52 @@ class VentureForgeState(BaseModel):
                 self.ideas,
                 self.scored_ideas,
                 self.pitch_briefs,
-                self.critique is not None,
+                self.critique is not None or self.current_stage == PipelineStage.COMPLETED,
             ]
         )
+
+    @computed_field
+    @property
+    def approved_pitches(self) -> list[PitchBrief]:
+        """Pitches that passed 100% of the Critic rubric checks."""
+        # Check critiques history and current critique
+        all_critiques = list(self.critiques)
+        if self.critique is not None:
+            all_critiques.append(self.critique)
+
+        # Map idea_id to latest critique
+        latest_by_idea: dict[UUID, Critique] = {c.idea_id: c for c in all_critiques}
+
+        approved: list[PitchBrief] = []
+        for brief in self.pitch_briefs:
+            crit = latest_by_idea.get(brief.idea_id)
+            if crit is not None and crit.all_pass:
+                approved.append(brief)
+        return approved
+
+    @computed_field
+    @property
+    def quarantined_pitches(self) -> list[PitchBrief]:
+        """Pitches that failed one or more rubric checks after maximum revisions."""
+        all_critiques = list(self.critiques)
+        if self.critique is not None:
+            all_critiques.append(self.critique)
+
+        latest_by_idea: dict[UUID, Critique] = {c.idea_id: c for c in all_critiques}
+
+        quarantined: list[PitchBrief] = []
+        for brief in self.pitch_briefs:
+            crit = latest_by_idea.get(brief.idea_id)
+            if (
+                crit is not None
+                and not crit.all_pass
+                and (
+                    crit.approval_status == "max_revisions_reached"
+                    or self.get_revision_count(brief.idea_id) >= self.max_revisions
+                )
+            ):
+                quarantined.append(brief)
+        return quarantined
 
     # -----------------------------------------------------------------
     # Helpers

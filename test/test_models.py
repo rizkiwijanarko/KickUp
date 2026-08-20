@@ -170,3 +170,119 @@ def test_pitch_brief_tagline_validation():
             evidence_links=["https://news.ycombinator.com/item?id=123"],
             markdown_content="# Content...",
         )
+
+
+def test_approved_and_quarantined_pitches_segregation():
+    from src.state.graph_state import VentureForgeState
+
+    landscape = CompetitiveLandscape(
+        current_behavior="Engineers spend hours reading log files manually and searching",
+        direct_competitors="Sentry and Datadog",
+        real_enemy="Print statements and unstructured logs",
+    )
+    validation = ValidationPlan(
+        discovery_questions=[
+            "How do you debug issues?",
+            "What is the bottleneck?",
+            "Who triages logs?",
+            "How much time is lost?",
+            "What would make you switch?",
+        ],
+        validation_criteria="At least 5 engineering teams adopt within two weeks",
+    )
+
+    idea1_id = uuid4()
+    idea2_id = uuid4()
+
+    brief1 = PitchBrief(
+        idea_id=idea1_id,
+        title="Approved Tool",
+        tagline="A great tagline for devs",
+        problem="Problem description with sufficient length for schema validation requirements.",
+        solution="Solution description with sufficient length for schema validation requirements.",
+        target_user="Senior Software Engineers",
+        market_opportunity="Large growing market in developer observability tools.",
+        competitive_landscape=landscape,
+        differentiation="Unique automated sandbox tracing mechanism.",
+        validation_plan=validation,
+        business_model="Monthly SaaS subscriptions with tiers.",
+        go_to_market="Direct outreach to developer communities.",
+        key_risk="Cloud compute and memory infrastructure costs.",
+        next_steps="Build working MVP and deploy landing page.",
+        evidence_links=["https://news.ycombinator.com/item?id=1"],
+        markdown_content="# Approved Tool\n\nFull markdown content that is long enough to easily pass the minimum character count of 100 characters required by Pydantic.",
+    )
+
+    brief2 = PitchBrief(
+        idea_id=idea2_id,
+        title="Quarantined Tool",
+        tagline="Another good tagline here",
+        problem="Problem description with sufficient length for schema validation requirements.",
+        solution="Solution description with sufficient length for schema validation requirements.",
+        target_user="Senior Software Engineers",
+        market_opportunity="Large growing market in developer observability tools.",
+        competitive_landscape=landscape,
+        differentiation="Unique automated sandbox tracing mechanism.",
+        validation_plan=validation,
+        business_model="Monthly SaaS subscriptions with tiers.",
+        go_to_market="Direct outreach to developer communities.",
+        key_risk="Cloud compute and memory infrastructure costs.",
+        next_steps="Build working MVP and deploy landing page.",
+        evidence_links=["https://news.ycombinator.com/item?id=2"],
+        markdown_content="# Quarantined Tool\n\nFull markdown content that is long enough to easily pass the minimum character count of 100 characters required by Pydantic.",
+    )
+
+    rubric_pass = CritiqueRubric(
+        all_claims_evidence_backed=True,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=True,
+        target_is_contained_fire=True,
+        competition_embraced_with_thesis=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    critique1 = Critique(
+        idea_id=idea1_id,
+        reasoning_trace="All rubric checks pass successfully.",
+        rubric=rubric_pass,
+        all_pass=True,
+        approval_status="approved",
+        target_agent="idea_generator",
+        revision_feedback="Pitch brief is fully approved and validated.",
+    )
+
+    rubric_fail = CritiqueRubric(
+        all_claims_evidence_backed=False,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=True,
+        target_is_contained_fire=True,
+        competition_embraced_with_thesis=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    critique2 = Critique(
+        idea_id=idea2_id,
+        reasoning_trace="Evidence check failed",
+        rubric=rubric_fail,
+        all_pass=False,
+        approval_status="max_revisions_reached",
+        target_agent="pain_point_miner",
+        revision_feedback="Max revisions reached.",
+    )
+
+    state = VentureForgeState(
+        domain="developer tools",
+        pitch_briefs=[brief1, brief2],
+        critiques=[critique1, critique2],
+        max_revisions=2,
+        revision_counts={str(idea2_id): 2},
+    )
+
+    assert len(state.approved_pitches) == 1
+    assert state.approved_pitches[0].title == "Approved Tool"
+
+    assert len(state.quarantined_pitches) == 1
+    assert state.quarantined_pitches[0].title == "Quarantined Tool"
+
