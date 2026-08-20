@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 
@@ -34,29 +33,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def load_system_prompt() -> str:
-    """
-    Load compressed pitch writer prompt to reduce token usage.
-
-    Returns:
-        System prompt content
-    """
-    compressed_path = (
-        Path(__file__).parent.parent.parent
-        / "agent_prompts"
-        / "pitch_writer_prompt_compressed.txt"
-    )
-
-    if compressed_path.exists():
-        with open(compressed_path, "r", encoding="utf-8") as f:
-            return f.read()
-    else:
-        logger.warning(
-            "[pitch_writer] Compressed prompt not found, using original"
-        )
-        return get_prompt("pitch_writer")
-
-
 def build_system_prompt() -> str:
     """
     Build complete system prompt.
@@ -64,7 +40,7 @@ def build_system_prompt() -> str:
     Returns:
         Complete system prompt
     """
-    base_prompt = load_system_prompt()
+    base_prompt = get_prompt("pitch_writer")
     # No JSON instruction needed - structured output handles this
     return base_prompt
 
