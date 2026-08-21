@@ -1,10 +1,6 @@
-"""
-Unit tests for CompositeDataMiner and SourceProviders.
-"""
-
-import pytest
-from src.mining import CompositeDataMiner, RawEvidence, SourceProvider
+from src.mining import CompositeDataMiner, RawEvidence
 from src.models import DataSource
+
 
 
 class FakeSourceProvider:
@@ -73,12 +69,16 @@ def test_composite_miner_with_mock_providers():
     assert len(available) == 2
     assert [p.name for p in available] == ["hackernews", "tavily"]
 
-    # Ingest: since p1 yields only 1 unique item (< min_total_evidence=10), p3 will be activated
+    # Ingest: with 2 live items (< HYBRID_AUGMENTATION_THRESHOLD=8), hybrid augmentation yields 6 items
     evidence = miner.mine("microservices", min_total_evidence=10)
-    assert len(evidence) == 2
+    assert len(evidence) == 6
     urls = [e.url for e in evidence]
     assert "https://news.ycombinator.com/item?id=101" in urls
     assert "https://dev.to/article/102" in urls
+    # Verify synthetic items are present
+    synthetic_count = sum(1 for e in evidence if e.metadata.get("synthetic"))
+    assert synthetic_count == 4
+
 
     # Validate quote helper
     found = miner.validate_quote("excruciatingly slow", evidence)
@@ -87,3 +87,29 @@ def test_composite_miner_with_mock_providers():
 
     not_found = miner.validate_quote("non existent phrase", evidence)
     assert not_found is None
+
+
+def test_composite_miner_engagement_sorting_and_no_augmentation():
+    # 10 items (> HYBRID_AUGMENTATION_THRESHOLD=8) with different scores
+    items = [
+        RawEvidence(
+            text=f"Sample evidence text item {i} describing friction in developer tools.",
+            url=f"https://news.ycombinator.com/item?id=20{i}",
+            source=DataSource.HACKERNEWS,
+            score=i * 10,
+        )
+        for i in range(10)
+    ]
+    p = FakeSourceProvider(name="hackernews", source_type=DataSource.HACKERNEWS, available=True, items=items)
+    miner = CompositeDataMiner(providers=[p])
+    evidence = miner.mine("developer tools")
+
+    assert len(evidence) == 10
+    # Verify no synthetic items
+    assert all(not e.metadata.get("synthetic") for e in evidence)
+    # Verify sorted descending by score
+    scores = [e.score for e in evidence]
+    assert scores == sorted(scores, reverse=True)
+    assert scores[0] == 90
+    assert scores[-1] == 0
+

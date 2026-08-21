@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 
 import diskcache
 import requests
+
 
 from src.config import settings
 from src.tools.reddit_scraper import ScrapedComment
@@ -141,16 +141,20 @@ def _hit_to_comment(hit: dict) -> ScrapedComment | None:
         return None
 
     object_id = hit.get("objectID", "")
-    story_id = hit.get("story_id", object_id)
     story_title = hit.get("story_title", "") or hit.get("title", "")
     url = f"https://news.ycombinator.com/item?id={object_id}"
+    points = int(hit.get("points") or hit.get("story_points") or 0)
+    num_comments = int(hit.get("num_comments") or hit.get("story_num_comments") or 0)
 
     return ScrapedComment(
         text=text,
         url=url,
-        subreddit=f"hackernews",  # reuse field name for compatibility
+        subreddit="hackernews",  # reuse field name for compatibility
         post_title=story_title,
+        score=points,
+        num_comments=num_comments,
     )
+
 
 
 def scrape_for_domain(domain: str, max_total_comments: int = 150) -> list[ScrapedComment]:

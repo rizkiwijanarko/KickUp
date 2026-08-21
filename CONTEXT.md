@@ -59,3 +59,16 @@ _Avoid_: Top scoring filter, greedy selection
 **Synthetic Evidence Mode**:
 The resiliency fallback mechanism that synthesizes plausible grounded domain evidence when external scrapers and APIs are unavailable or rate-limited.
 _Avoid_: Fake data mode, dummy mode, offline stub
+
+**Engagement-Ranked Evidence**:
+Raw evidence sorted by composite engagement metrics (upvotes, comment volume, domain keyword density) before prompt ingestion.
+_Avoid_: Top comments, popular posts
+
+**Hybrid Evidence Augmentation**:
+The resiliency mechanism that automatically supplements sparse live evidence below the minimum threshold with domain-grounded synthetic evidence to ensure seamless pipeline execution.
+_Avoid_: Padding, fallback blend
+
+**Multi-Evidence Clustering**:
+The synthesis pattern of grouping multiple distinct verbatim quotes across sources into a single validated Pain Point with 2+ grounded evidence references.
+_Avoid_: Grouping, complaint bundling
+

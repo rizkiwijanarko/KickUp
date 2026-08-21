@@ -124,6 +124,8 @@ class ScrapedComment:
     url: str
     subreddit: str
     post_title: str
+    score: int = 0
+    num_comments: int = 0
 
 
 # ------------------------------------------------------------------

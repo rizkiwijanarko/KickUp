@@ -3,6 +3,10 @@ VentureForge Custom Exceptions
 ===============================
 Domain-specific exceptions for better error handling and debugging.
 """
+from __future__ import annotations
+
+from typing import Any
+
 
 
 class VentureForgeError(Exception):
@@ -216,13 +220,14 @@ class MissingAPIKeyError(ConfigurationError):
 class InvalidConfigurationError(ConfigurationError):
     """Configuration value is invalid."""
 
-    def __init__(self, setting_name: str, value: any, reason: str):
+    def __init__(self, setting_name: str, value: Any, reason: str):
         self.setting_name = setting_name
         self.value = value
         self.reason = reason
         super().__init__(
             f"Invalid configuration for '{setting_name}' = {value}: {reason}"
         )
+
 
 
 # =============================================================================

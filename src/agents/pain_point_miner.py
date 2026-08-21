@@ -19,7 +19,7 @@ from src.constants import (
     POST_TITLE_MAX_LENGTH,
 )
 from src.exceptions import LLMError, LLMJSONParseError
-from src.llm.client import coerce_rubric_bools, coerce_yes_no, extract_json, get_llm
+from src.llm.client import coerce_rubric_bools, extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.mining import CompositeDataMiner, RawEvidence
 from src.models import (
@@ -34,7 +34,7 @@ from src.state.graph_state import VentureForgeState
 logger = logging.getLogger(__name__)
 
 
-def serialize_evidence(evidence: list[RawEvidence], limit: int = 20) -> list[dict[str, str]]:
+def serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[dict[str, Any]]:
     """Serialize evidence items to compact dict format for LLM prompt."""
     return [
         {
@@ -42,6 +42,7 @@ def serialize_evidence(evidence: list[RawEvidence], limit: int = 20) -> list[dic
             "url": item.url,
             "source": item.source.value if hasattr(item.source, "value") else str(item.source),
             "post_title": item.title[:POST_TITLE_MAX_LENGTH] if item.title else "",
+            "score": item.score,
         }
         for item in evidence[:limit]
     ]
@@ -61,22 +62,32 @@ def build_system_prompt() -> str:
 def build_user_prompt(
     domain: str,
     max_pain_points: int,
-    evidence: list[dict[str, str]],
+    evidence: list[dict[str, Any]],
     revision_feedback: str | None = None,
 ) -> str:
     """Build user prompt for pain point extraction."""
     feedback = revision_feedback or "None"
 
     return (
-        f"Extract up to {max_pain_points} pain points from the "
+        f"Extract up to {max_pain_points} high-signal, clustered pain points from the "
         f"{len(evidence)} comments below.\n"
         f"Domain: {domain}\n"
         f"Revision feedback (if any): {feedback}\n\n"
-        f"COMMENTS:\n{json.dumps(evidence, indent=2)}\n\n"
-        "Return a JSON array of pain points. Each must have: "
-        "id, title, description, rubric, passes_rubric, source_url, raw_quote, source.\n"
-        "The raw_quote MUST be a literal substring from one of the provided comment texts.\n"
-        f"Extract exactly {max_pain_points} pain points or fewer if not enough genuine points exist."
+        f"COMMENTS (ranked by engagement):\n{json.dumps(evidence, indent=2)}\n\n"
+        "Return a JSON array of clustered pain points. Each pain point MUST include:\n"
+        "- id: (UUID string)\n"
+        "- title: (5-10 words summarizing the pain point)\n"
+        "- description: (1-2 sentences explaining the problem)\n"
+        "- rubric: {\"is_genuine_current_frustration\": true, \"has_verbatim_quote\": true, \"user_segment_specific\": true}\n"
+        "- passes_rubric: true\n"
+        "- evidence: array of 1-10 evidence objects, where each object has:\n"
+        "    * source_url: exact URL from the comments above\n"
+        "    * raw_quote: EXACT verbatim substring from that comment's text\n"
+        "    * source: data source enum (\"hackernews\", \"producthunt\", \"web\", \"reddit\", or \"youtube\")\n\n"
+        "Rules:\n"
+        "1. Cluster similar complaints together — prefer pain points with 2+ evidence items.\n"
+        "2. Every raw_quote MUST be an exact literal substring of the provided comments.\n"
+        f"Extract up to {max_pain_points} distinct pain points."
     )
 
 
@@ -105,7 +116,7 @@ def call_llm_for_pain_points(
     start_time = time.monotonic()
     try:
         response = llm.invoke(messages)
-        content = response.content if hasattr(response, "content") else str(response)
+        content = str(response.content) if hasattr(response, "content") else str(response)
     except Exception as e:
         elapsed = time.monotonic() - start_time
         logger.error(f"[pain_point_miner] LLM invocation failed after {elapsed:.1f}s: {e}")
@@ -130,11 +141,27 @@ def parse_llm_response(response_content: str) -> list[dict[str, Any]]:
         return []
     except Exception as e:
         logger.warning(f"[pain_point_miner] JSON parse error: {e}")
-        raise LLMJSONParseError(f"Failed to parse pain points JSON: {e}") from e
+        raise LLMJSONParseError(raw_response=response_content, parse_error=str(e)) from e
 
 
-def convert_to_pain_points(raw_items: list[dict[str, Any]]) -> list[PainPoint]:
-    """Convert raw parsed dictionaries to validated PainPoint instances."""
+
+def _verify_quote_against_corpus(quote: str, corpus: list[RawEvidence]) -> bool:
+    """Check if quote or cleaned quote exists in raw evidence texts."""
+    clean_quote = " ".join(quote.replace("*", "").replace(">", "").replace('"', "").split()).lower()
+    if not clean_quote or len(clean_quote) < 5:
+        return False
+    for item in corpus:
+        clean_text = " ".join(item.text.replace("*", "").replace(">", "").replace('"', "").split()).lower()
+        if clean_quote in clean_text or clean_quote[:30] in clean_text:
+            return True
+    return False
+
+
+def convert_to_pain_points(
+    raw_items: list[dict[str, Any]],
+    evidence_corpus: list[RawEvidence] | None = None,
+) -> list[PainPoint]:
+    """Convert raw parsed dictionaries to validated PainPoint instances with quote verification."""
     pain_points: list[PainPoint] = []
 
     for item in raw_items:
@@ -153,21 +180,44 @@ def convert_to_pain_points(raw_items: list[dict[str, Any]]) -> list[PainPoint]:
                         ev_src_enum = DataSource(ev_src)
                     except ValueError:
                         ev_src_enum = DataSource.WEB
+                    
+                    raw_quote = ev.get("raw_quote", "Quote unavailable")
+                    # Validate quote against corpus if corpus is provided
+                    if evidence_corpus:
+                        if not _verify_quote_against_corpus(raw_quote, evidence_corpus):
+                            logger.info(f"[pain_point_miner] Dropping ungrounded secondary quote: {raw_quote[:40]}...")
+                            continue
+
                     evidence_objects.append(
                         PainPointEvidence(
                             source_url=ev.get("source_url", "https://news.ycombinator.com"),
-                            raw_quote=ev.get("raw_quote", "Quote unavailable"),
+                            raw_quote=raw_quote,
                             source=ev_src_enum,
                         )
                     )
             else:
-                evidence_objects.append(
-                    PainPointEvidence(
-                        source_url=item.get("source_url", "https://news.ycombinator.com"),
-                        raw_quote=item.get("raw_quote", item.get("description", "")),
-                        source=source_enum,
+                raw_quote = item.get("raw_quote", item.get("description", ""))
+                if evidence_corpus:
+                    if _verify_quote_against_corpus(raw_quote, evidence_corpus):
+                        evidence_objects.append(
+                            PainPointEvidence(
+                                source_url=item.get("source_url", "https://news.ycombinator.com"),
+                                raw_quote=raw_quote,
+                                source=source_enum,
+                            )
+                        )
+                else:
+                    evidence_objects.append(
+                        PainPointEvidence(
+                            source_url=item.get("source_url", "https://news.ycombinator.com"),
+                            raw_quote=raw_quote,
+                            source=source_enum,
+                        )
                     )
-                )
+
+            if not evidence_objects:
+                logger.warning(f"[pain_point_miner] Skipping item '{item.get('title', '')}' — no verified quotes found.")
+                continue
 
             raw_id = item.get("id")
             if isinstance(raw_id, UUID):
@@ -242,7 +292,7 @@ def mine_pain_points(
         revision_feedback=revision_feedback,
     )
     raw_data = parse_llm_response(content)
-    pain_points = convert_to_pain_points(raw_data)
+    pain_points = convert_to_pain_points(raw_data, evidence_corpus=evidence)
     validated = validate_pain_points(pain_points)
     return validated[:max_pain_points]
 
@@ -275,10 +325,14 @@ def run(state: VentureForgeState) -> dict[str, Any]:
             ),
         }
 
-    # Append mode with deduplication
-    existing_titles = {p.title.lower() for p in state.pain_points}
-    new_points = [p for p in extracted if p.title.lower() not in existing_titles]
-    final = (state.pain_points + new_points)[:max_pain_points]
+    # Handle reflection revision vs standard additive mode
+    if state.revision_feedback:
+        logger.info("[pain_point_miner] Revision mode activated. Updating pain points with fresh extractions.")
+        final = extracted[:max_pain_points] if extracted else state.pain_points[:max_pain_points]
+    else:
+        existing_titles = {p.title.lower() for p in state.pain_points}
+        new_points = [p for p in extracted if p.title.lower() not in existing_titles]
+        final = (state.pain_points + new_points)[:max_pain_points]
 
     return {
         "pain_points": final,
@@ -290,3 +344,4 @@ def run(state: VentureForgeState) -> dict[str, Any]:
             message=f"Extracted {len(final)} validated pain points for domain '{state.domain}'.",
         ),
     }
+
