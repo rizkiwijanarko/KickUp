@@ -4,14 +4,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.constants import (
-    PURSUE_SCORE_THRESHOLD,
-    EXPLORE_SCORE_THRESHOLD,
     SCORER_LLM_TEMPERATURE,
     SCORER_LLM_MAX_TOKENS,
     ERROR_SCORER_LLM_INVOCATION_FAILED,

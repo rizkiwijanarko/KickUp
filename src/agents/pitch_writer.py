@@ -14,8 +14,7 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.constants import MAX_PITCH_GENERATION_ATTEMPTS
-from src.exceptions import LLMError, LLMJSONParseError
-from src.llm.client import get_llm, get_structured_llm
+from src.llm.client import get_structured_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
     CompetitiveLandscape,
@@ -33,7 +32,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def build_system_prompt() -> str:
+def _build_system_prompt() -> str:
     """
     Build complete system prompt.
 
@@ -196,7 +195,7 @@ def build_revision_block(state: VentureForgeState) -> str:
     )
 
 
-def build_user_prompt_single(
+def _build_user_prompt_single(
     state: VentureForgeState,
     scored_idea: Any,
 ) -> str:
@@ -269,8 +268,8 @@ def call_llm_for_pitch(
     )
 
     messages = [
-        SystemMessage(content=build_system_prompt()),
-        HumanMessage(content=build_user_prompt_single(state, scored_idea)),
+        SystemMessage(content=_build_system_prompt()),
+        HumanMessage(content=_build_user_prompt_single(state, scored_idea)),
     ]
 
     start_time = time.monotonic()

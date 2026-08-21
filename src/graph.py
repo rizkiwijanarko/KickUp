@@ -13,22 +13,23 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, StateGraph
 
-from src.agents.orchestrator import (
-    critic,
-    idea_generator,
-    orchestrator,
-    pain_point_miner,
-    pitch_writer,
-    scorer,
-)
+from src.agents import critic as critic_agent
+from src.agents import idea_generator as idea_generator_agent
+from src.agents import pain_point_miner as pain_point_miner_agent
+from src.agents import pitch_writer as pitch_writer_agent
+from src.agents import scorer as scorer_agent
+from src.agents.orchestrator import orchestrator
 from src.state.graph_state import VentureForgeState
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,25 @@ ALLOWED_MSGPACK_MODULES = [
     ("src.models.critique", "Critique"),
     ("src.models.critique", "CritiqueRubric"),
 ]
+
+
+def timed(
+    name: str,
+    fn: Callable[[VentureForgeState], dict[str, Any]],
+) -> Callable[[VentureForgeState], dict[str, Any]]:
+    """Wrap a worker node function with elapsed-time recording.
+
+    Returns a closure that calls fn(state), merges the agent_timings
+    patch, and preserves the original function name for LangGraph.
+    """
+    def _wrapper(state: VentureForgeState) -> dict[str, Any]:
+        t0 = time.monotonic()
+        result = fn(state)
+        return {**result, **state.record_timing(name, time.monotonic() - t0)}
+
+    _wrapper.__name__ = name
+    _wrapper.__qualname__ = name
+    return _wrapper
 
 
 def get_checkpointer(db_path: str | None = DEFAULT_CHECKPOINT_DB_PATH) -> BaseCheckpointSaver:
@@ -82,13 +102,13 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> StateGraph:
     """Build and return the compiled LangGraph StateGraph."""
     workflow = StateGraph(VentureForgeState)
 
-    # Register nodes
+    # Register nodes — workers are wrapped with timed() at the wiring site
     workflow.add_node("orchestrator", orchestrator)
-    workflow.add_node("pain_point_miner", pain_point_miner)
-    workflow.add_node("idea_generator", idea_generator)
-    workflow.add_node("scorer", scorer)
-    workflow.add_node("pitch_writer", pitch_writer)
-    workflow.add_node("critic", critic)
+    workflow.add_node("pain_point_miner", timed("pain_point_miner", pain_point_miner_agent.run))
+    workflow.add_node("idea_generator",   timed("idea_generator",   idea_generator_agent.run))
+    workflow.add_node("scorer",           timed("scorer",           scorer_agent.run))
+    workflow.add_node("pitch_writer",     timed("pitch_writer",     pitch_writer_agent.run))
+    workflow.add_node("critic",           timed("critic",           critic_agent.run))
 
     # Entry point
     workflow.set_entry_point("orchestrator")

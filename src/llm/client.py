@@ -2,7 +2,11 @@
 VentureForge LLM Client
 ========================
 Provider-agnostic OpenAI-compatible factory.
-Switch LLM provider by changing LLM_BASE_URL / LLM_API_KEY in env.
+Switch LLM provider by changing LLM_BASE_URL / LLM_API_KEY in .env.
+
+Provider-specific configuration (headers, extra body params, etc.) is
+handled by the adapters in ``src/llm/adapters.py``.  The factory here
+stays free of provider-identity checks.
 
 Usage:
     from src.llm.client import get_llm
@@ -13,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+from typing import cast
 import logging
 from functools import lru_cache
 from typing import Any
@@ -21,6 +26,9 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from src.config import settings
+from src.llm.adapters import get_adapter
+
+logger = logging.getLogger(__name__)
 
 
 def get_llm(
@@ -30,104 +38,39 @@ def get_llm(
     model: str | None = None,
     reasoning: bool = False,
 ) -> BaseChatModel:
-    """
-    Return a configured LLM instance.
+    """Return a configured LLM instance.
+
+    Provider-specific extras (e.g. OpenRouter headers) are applied
+    automatically via the registered adapters — no provider-name checks
+    live in this function.
 
     Args:
         temperature: Override default temperature (0.0–2.0).
-        max_tokens: Override default max_tokens.
-        model: Override default model name.
-        reasoning: True for heavy reasoning tasks (scorer, critic) → uses
-                   the large model. False for fast generative tasks.
+        max_tokens:  Override default max_tokens.
+        model:       Override default model name.
+        reasoning:   True for heavy reasoning tasks (scorer, critic) →
+                     uses the large model.  False for fast generative tasks.
     """
     config = settings.get_llm_config(reasoning=reasoning)
-    model_name = model or config["model"]
-    
-    # Detect if this is a Qwen3.6 model
-    is_qwen36 = "qwen3.6" in model_name.lower() or "qwen/qwen3.6" in model_name.lower()
-    
-    # Cap max_tokens to avoid vLLM validation errors
-    # Qwen3.6-35B-A3B typically has max_model_len around 32k-128k depending on deployment
-    # Use a safe default that works with most vLLM deployments
-    requested_max_tokens = max_tokens or settings.max_tokens
-    safe_max_tokens = min(requested_max_tokens, 32768)  # Safe limit for most deployments
-    
-    if requested_max_tokens > safe_max_tokens:
-        logging.getLogger(__name__).warning(
-            f"[llm_client] Requested max_tokens={requested_max_tokens} exceeds safe limit. "
-            f"Capping to {safe_max_tokens} to avoid vLLM validation errors."
-        )
-    
-    # Base parameters
+    base_url: str = config["base_url"]
+
     base_params: dict[str, Any] = {
-        "base_url": config["base_url"],
+        "base_url": base_url,
         "api_key": config["api_key"] or "sk-dummy",
-        "model": model_name,
+        "model": model or config["model"],
         "temperature": temperature if temperature is not None else settings.default_temperature,
-        "max_tokens": safe_max_tokens,
+        "max_tokens": max_tokens or settings.max_tokens,
         "timeout": float(config.get("timeout") or 120),
         "max_retries": 3,
     }
 
-    # Add OpenRouter-specific headers if using OpenRouter
-    if "openrouter.ai" in config["base_url"].lower():
-        base_params["default_headers"] = {
-            "HTTP-Referer": "https://github.com/rizkiwijanarko/KickUp",
-            "X-Title": "VentureForge",
-        }
-    
-    # Add Qwen3.6-specific parameters if detected
-    if is_qwen36:
-        # Determine if this is a coding task (precise) or general task
-        # Reasoning tasks (scorer, critic) use precise coding parameters
-        # Non-reasoning tasks use general thinking parameters
-        if reasoning:
-            # Precise coding tasks: temperature=0.6, top_p=0.95, presence_penalty=0.0
-            qwen_params = {
-                "temperature": 0.6,
-                "top_p": 0.95,
-                "extra_body": {
-                    "top_k": 20,
-                    "repetition_penalty": 1.0,
-                    "presence_penalty": 0.0,
-                },
-            }
-        else:
-            # General thinking tasks: temperature=1.0, top_p=0.95, presence_penalty=1.5
-            # For structured output (JSON), disable thinking mode and presence penalty
-            # ✅ FIX: presence_penalty=0.0 prevents skipping repeated tokens (quotes, commas)
-            # High presence_penalty (1.5) was causing LLM to omit opening quotes in JSON strings
-            qwen_params = {
-                "temperature": 1.0,
-                "top_p": 0.95,
-                "extra_body": {
-                    "top_k": 20,
-                    "repetition_penalty": 1.0,
-                    "presence_penalty": 0.0,  # Changed from 1.5 - critical for JSON output!
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            }
-        
-        # Override with user-provided temperature if specified
-        if temperature is not None:
-            qwen_params["temperature"] = temperature
-        
-        # Merge Qwen parameters into base parameters
-        base_params.update(qwen_params)
-        
-        logging.getLogger(__name__).info(
-            f"[llm_client] Qwen3.6 detected, using {'thinking' if reasoning else 'instruct'} mode with "
-            f"temp={qwen_params['temperature']}, top_p={qwen_params.get('top_p', 'default')}, "
-            f"max_tokens={safe_max_tokens}"
-        )
-    
-    # DeepSeek configuration on OpenRouter
-    is_deepseek = "deepseek" in model_name.lower()
-    if is_deepseek and not reasoning:
-        base_params.setdefault("extra_body", {})["chat_template_kwargs"] = {"enable_thinking": False}
-        logging.getLogger(__name__).info(
-            f"[llm_client] DeepSeek detected (non-reasoning): disabled thinking mode for fast structured generation."
-        )
+    adapter = get_adapter(base_url)
+    if adapter:
+        extras = adapter.extra_params(base_params, reasoning)
+        base_params = {**base_params, **extras}
+        logger.debug(f"[llm_client] Using {adapter.name} adapter for base_url={base_url!r}")
+    else:
+        logger.debug(f"[llm_client] No adapter matched for base_url={base_url!r}; using base params.")
 
     return ChatOpenAI(**base_params)
 
@@ -141,80 +84,51 @@ def get_structured_llm(
     max_tokens: int | None = 16384,
     reasoning: bool = False,
 ) -> BaseChatModel:
-    """
-    Return an LLM configured with a Pydantic output schema for structured generation.
+    """Return an LLM configured with a Pydantic output schema for structured generation.
 
     Args:
         output_schema: A Pydantic v2 BaseModel subclass describing the desired output.
-        temperature: Override default temperature.
-        model: Override default model name.
-        max_tokens: Override default max tokens (defaults to 16384 for structured outputs).
-        reasoning: True for heavy reasoning tasks.
+        temperature:   Override default temperature.
+        model:         Override default model name.
+        max_tokens:    Override default max tokens (defaults to 16384 for structured outputs).
+        reasoning:     True for heavy reasoning tasks.
     """
     base = get_llm(temperature=temperature, model=model, max_tokens=max_tokens, reasoning=reasoning)
-    return base.with_structured_output(output_schema)
+    return cast(BaseChatModel, base.with_structured_output(output_schema))
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # JSON extraction helper — robust against LLM formatting quirks
-# ------------------------------------------------------------------
-
-def strip_thinking_tags(text: str) -> str:
-    """Remove Qwen3.6 thinking tags from response text.
-    
-    Qwen3.6 outputs thinking process wrapped in <think>...</think> tags.
-    This function strips those tags to get the actual response.
-    
-    Example input:
-        <think>
-        Here's a thinking process:
-        1. Analyze...
-        </think>
-        
-        {"result": "actual response"}
-    
-    Returns: '{"result": "actual response"}'
-    """
-    if not text:
-        return text
-    
-    # Find and remove <think>...</think> blocks
-    import re
-    # Use DOTALL flag to match across newlines
-    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    return cleaned.strip()
+# ---------------------------------------------------------------------------
 
 
 def extract_json(text: str) -> dict | list | None:
     """Extract the first JSON object or array from raw LLM text.
 
-    Handles markdown fences, trailing prose, control characters, trailing commas, and Qwen3.6 thinking tags.
-    Returns None if no valid JSON found.
+    Handles markdown fences, trailing prose, control characters, and
+    trailing commas.  Returns None if no valid JSON is found.
     """
     if not text:
         return None
-    
+
     import re
 
-    # Strip Qwen3.6 thinking tags first
-    text = strip_thinking_tags(text)
     text = text.strip()
 
-    # Strategy 1: Check for markdown code blocks (```json ... ``` or ``` ... ```)
+    # Strategy 1: markdown code blocks (```json ... ``` or ``` ... ```)
     code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if code_block_match:
         block_text = code_block_match.group(1).strip()
         try:
-            return json.loads(block_text, strict=False)
+            return cast(dict | list, json.loads(block_text, strict=False))
         except json.JSONDecodeError:
-            # Try cleaning trailing commas
             cleaned_block = re.sub(r",\s*([\]}])", r"\1", block_text)
             try:
-                return json.loads(cleaned_block, strict=False)
+                return cast(dict | list, json.loads(cleaned_block, strict=False))
             except json.JSONDecodeError:
                 pass
 
-    # Strategy 2: Find outermost structural boundaries
+    # Strategy 2: outermost structural boundaries
     start_idx = -1
     for ch in ("[", "{"):
         idx = text.find(ch)
@@ -230,18 +144,17 @@ def extract_json(text: str) -> dict | list | None:
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         candidate = text[start_idx : end_idx + 1]
         try:
-            return json.loads(candidate, strict=False)
+            return cast(dict | list, json.loads(candidate, strict=False))
         except json.JSONDecodeError:
-            # Try cleaning trailing commas
             cleaned = re.sub(r",\s*([\]}])", r"\1", candidate)
             try:
-                return json.loads(cleaned, strict=False)
+                return cast(dict | list, json.loads(cleaned, strict=False))
             except json.JSONDecodeError:
                 pass
 
-    # Strategy 3: Direct fallback load
+    # Strategy 3: direct fallback
     try:
-        return json.loads(text, strict=False)
+        return cast(dict | list, json.loads(text, strict=False))
     except json.JSONDecodeError:
         return None
 

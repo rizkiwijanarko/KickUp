@@ -9,19 +9,15 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.constants import (
-    CRITIC_LLM_MAX_TOKENS,
     CRITIC_LLM_TEMPERATURE,
-    ERROR_CRITIC_JSON_EXTRACTION_FAILED,
     ERROR_CRITIC_LLM_INVOCATION_FAILED,
-    ERROR_CRITIC_PARSE_FAILED,
     WARNING_CRITIC_NO_BRIEFS,
 )
 from src.exceptions import LLMError, ValidationError
-from src.llm.client import coerce_rubric_bools, get_llm, get_structured_llm
+from src.llm.client import get_structured_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import (
     Critique,
-    CritiqueRubric,
     PipelineStage,
     VentureForgeState,
 )
@@ -101,7 +97,7 @@ def _build_user_prompt(state: VentureForgeState) -> str:
         User prompt with brief details and context
     """
     index, brief = _get_brief_to_review(state)
-    revision_count = state.get_revision_count(brief.idea_id)
+    revision_count = state.revisions.count(brief.idea_id)
     scored_idea = _get_scored_idea(state, brief.idea_id)
     brief_dict = _serialize_brief(brief)
     
@@ -189,7 +185,7 @@ def _is_at_max_revisions(state: VentureForgeState, idea_id: UUID) -> bool:
     Returns:
         True if at max revisions, False otherwise
     """
-    return state.get_revision_count(idea_id) >= state.max_revisions
+    return not state.revisions.can_revise(idea_id)
 
 
 def _handle_max_revisions(critique: Critique, state: VentureForgeState) -> Critique:

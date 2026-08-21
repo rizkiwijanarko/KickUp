@@ -34,7 +34,7 @@ from src.state.graph_state import VentureForgeState
 logger = logging.getLogger(__name__)
 
 
-def serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[dict[str, Any]]:
+def _serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[dict[str, Any]]:
     """Serialize evidence items to compact dict format for LLM prompt."""
     return [
         {
@@ -48,7 +48,7 @@ def serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[dic
     ]
 
 
-def build_system_prompt() -> str:
+def _build_system_prompt() -> str:
     """Build system prompt for pain point extraction."""
     base_prompt = get_prompt("pain_point_miner")
     json_instruction = (
@@ -59,7 +59,7 @@ def build_system_prompt() -> str:
     return base_prompt + json_instruction
 
 
-def build_user_prompt(
+def _build_user_prompt(
     domain: str,
     max_pain_points: int,
     evidence: list[dict[str, Any]],
@@ -91,7 +91,7 @@ def build_user_prompt(
     )
 
 
-def call_llm_for_pain_points(
+def _call_llm_for_pain_points(
     domain: str,
     max_pain_points: int,
     evidence: list[RawEvidence],
@@ -99,12 +99,12 @@ def call_llm_for_pain_points(
 ) -> str:
     """Invoke LLM to extract structured pain points from evidence."""
     llm = get_llm(temperature=0.2, max_tokens=16384, reasoning=False)
-    serialized = serialize_evidence(evidence)
+    serialized = _serialize_evidence(evidence)
 
     messages = [
-        SystemMessage(content=build_system_prompt()),
+        SystemMessage(content=_build_system_prompt()),
         HumanMessage(
-            content=build_user_prompt(
+            content=_build_user_prompt(
                 domain=domain,
                 max_pain_points=max_pain_points,
                 evidence=serialized,
@@ -127,7 +127,7 @@ def call_llm_for_pain_points(
     return content
 
 
-def parse_llm_response(response_content: str) -> list[dict[str, Any]]:
+def _parse_llm_response(response_content: str) -> list[dict[str, Any]]:
     """Parse JSON array from LLM response."""
     try:
         data = extract_json(response_content)
@@ -157,7 +157,7 @@ def _verify_quote_against_corpus(quote: str, corpus: list[RawEvidence]) -> bool:
     return False
 
 
-def convert_to_pain_points(
+def _convert_to_pain_points(
     raw_items: list[dict[str, Any]],
     evidence_corpus: list[RawEvidence] | None = None,
 ) -> list[PainPoint]:
@@ -252,7 +252,7 @@ def convert_to_pain_points(
     return pain_points
 
 
-def validate_pain_points(pain_points: list[PainPoint]) -> list[PainPoint]:
+def _validate_pain_points(pain_points: list[PainPoint]) -> list[PainPoint]:
     """Filter for pain points meeting rubric and length requirements."""
     validated: list[PainPoint] = []
     for pp in pain_points:
@@ -285,15 +285,15 @@ def mine_pain_points(
         logger.warning(f"[pain_point_miner] No evidence found for domain: {domain}")
         return []
 
-    content = call_llm_for_pain_points(
+    content = _call_llm_for_pain_points(
         domain=domain,
         max_pain_points=max_pain_points,
         evidence=evidence,
         revision_feedback=revision_feedback,
     )
-    raw_data = parse_llm_response(content)
-    pain_points = convert_to_pain_points(raw_data, evidence_corpus=evidence)
-    validated = validate_pain_points(pain_points)
+    raw_data = _parse_llm_response(content)
+    pain_points = _convert_to_pain_points(raw_data, evidence_corpus=evidence)
+    validated = _validate_pain_points(pain_points)
     return validated[:max_pain_points]
 
 

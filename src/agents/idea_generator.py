@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.constants import MAX_IDEAS_PER_RUN_DEFAULT, MAX_PAIN_POINTS_FOR_PROMPT
-from src.exceptions import LLMError, LLMJSONParseError, InvalidIdeaError
+from src.exceptions import LLMError, LLMJSONParseError
 from src.llm.client import extract_json, get_llm
 from src.llm.prompts import get_prompt
 from src.state.schema import Idea, PipelineStage, VentureForgeState
@@ -89,7 +89,7 @@ def serialize_pain_point_for_ideas(pain_point: Any) -> Dict[str, Any]:
 # =============================================================================
 
 
-def build_system_prompt() -> str:
+def _build_system_prompt() -> str:
     """Build system prompt for idea generation."""
     return get_prompt("idea_generator")
 
@@ -148,7 +148,7 @@ def build_requirement_block(pain_point_count: int) -> str:
         return "ERROR: No pain points provided. Cannot generate ideas.\n\n"
 
 
-def build_user_prompt(
+def _build_user_prompt(
     domain: str,
     pain_points: List[Dict[str, Any]],
     ideas_count: int,
@@ -181,7 +181,7 @@ def build_user_prompt(
     )
 
 
-def build_user_prompt_single(
+def _build_user_prompt_single(
     state: VentureForgeState,
     idea_number: int,
     total_ideas: int,
@@ -302,7 +302,7 @@ def call_llm_for_ideas(
     """
     llm = get_llm(temperature=0.7, max_tokens=16384, reasoning=False)
 
-    system_prompt = build_system_prompt()
+    system_prompt = _build_system_prompt()
     system_prompt += (
         "\n\n**CRITICAL: Output ONLY the JSON object. "
         "No markdown code fences, no explanations, no preamble. Start with { and end with }.**"
@@ -311,7 +311,7 @@ def call_llm_for_ideas(
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(
-            content=build_user_prompt(
+            content=_build_user_prompt(
                 domain=domain,
                 pain_points=pain_points,
                 ideas_count=ideas_count,
@@ -358,12 +358,12 @@ def invoke_llm_single(
     """
     llm = get_llm(temperature=0.7, max_tokens=16384, reasoning=False)
 
-    system_prompt = build_system_prompt()
+    system_prompt = _build_system_prompt()
     system_prompt += "\n\n**CRITICAL: Output ONLY a single JSON object. No markdown fences, no explanations. Start with { and end with }.**"
 
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=build_user_prompt_single(state, idea_number, total_ideas)),
+        HumanMessage(content=_build_user_prompt_single(state, idea_number, total_ideas)),
     ]
 
     start = time.monotonic()

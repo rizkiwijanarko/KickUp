@@ -11,26 +11,115 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, computed_field
 
 from src.models import (
-    CompetitiveLandscape,
     Critique,
-    CritiqueRubric,
-    DataSource,
-    DemandRubric,
-    FatalFlaw,
-    FeasibilityRubric,
     Idea,
-    NoveltyRubric,
     PainPoint,
-    PainPointEvidence,
-    PainPointRubric,
     PipelineStage,
     PitchBrief,
     RunEvent,
     ScoredIdea,
     TargetAgent,
-    ValidationPlan,
-    Verdict,
 )
+
+
+class RevisionLedger:
+    """Read-only query interface over the revision-tracking fields of
+    VentureForgeState.  Created on demand via ``state.revisions``; never
+    stored, never serialised.
+
+    Interface (the seam external code crosses):
+        can_revise(idea_id?)  -> bool
+        count(idea_id)        -> int
+        feedback              -> str | None
+        current_critique      -> Critique | None
+        all_critiques         -> list[Critique]
+        approved_idea_ids     -> frozenset[UUID]
+        quarantined_idea_ids  -> frozenset[UUID]
+
+    Implementation: six scattered raw fields snapshotted at construction.
+    Callers never touch ``critique``, ``critiques``, ``revision_counts``,
+    ``revision_feedback``, or ``pain_point_miner_revision_count`` directly.
+    """
+
+    def __init__(self, state: VentureForgeState) -> None:
+        self._critique = state.critique
+        self._critiques = list(state.critiques)
+        self._revision_counts = dict(state.revision_counts)
+        self._revision_feedback = state.revision_feedback
+        self._pp_miner_count = state.pain_point_miner_revision_count
+        self._max_revisions = state.max_revisions
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def can_revise(self, idea_id: UUID | None = None) -> bool:
+        """Return True if another revision cycle is allowed.
+
+        Without idea_id: global check (mirrors ``state.can_revise``).
+        With idea_id:    per-idea check used by critic and orchestrator.
+        """
+        if idea_id is None:
+            return self._global_can_revise()
+        return self._revision_counts.get(str(idea_id), 0) < self._max_revisions
+
+    def count(self, idea_id: UUID) -> int:
+        """Number of revisions already applied to this idea."""
+        return self._revision_counts.get(str(idea_id), 0)
+
+    @property
+    def feedback(self) -> str | None:
+        """Most recent revision feedback string."""
+        return self._revision_feedback
+
+    @property
+    def current_critique(self) -> Critique | None:
+        """The active Critique object, if any."""
+        return self._critique
+
+    @property
+    def all_critiques(self) -> list[Critique]:
+        """Historical critiques plus the current one."""
+        combined = list(self._critiques)
+        if self._critique is not None:
+            combined.append(self._critique)
+        return combined
+
+    @property
+    def approved_idea_ids(self) -> frozenset[UUID]:
+        """IDs of ideas whose latest Critique has all_pass=True."""
+        latest = self._latest_by_idea()
+        return frozenset(id_ for id_, c in latest.items() if c.all_pass)
+
+    @property
+    def quarantined_idea_ids(self) -> frozenset[UUID]:
+        """IDs of ideas that failed critique at max revisions."""
+        latest = self._latest_by_idea()
+        return frozenset(
+            id_
+            for id_, c in latest.items()
+            if not c.all_pass
+            and (
+                c.approval_status == "max_revisions_reached"
+                or self.count(id_) >= self._max_revisions
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _global_can_revise(self) -> bool:
+        if self._critique is None:
+            if self._revision_counts:
+                return max(self._revision_counts.values()) < self._max_revisions
+            return True
+        if self._critique.target_agent == "pain_point_miner":
+            return self._pp_miner_count < self._max_revisions
+        return self.can_revise(self._critique.idea_id)
+
+    def _latest_by_idea(self) -> dict[UUID, Critique]:
+        return {c.idea_id: c for c in self.all_critiques}
 
 
 class VentureForgeState(BaseModel):
@@ -122,15 +211,7 @@ class VentureForgeState(BaseModel):
     @property
     def can_revise(self) -> bool:
         """True if the current critique or reflection can still trigger revision."""
-        if self.critique is None:
-            if self.revision_counts:
-                return max(self.revision_counts.values()) < self.max_revisions
-            return True
-
-        if self.critique.target_agent == "pain_point_miner":
-            return self.pain_point_miner_revision_count < self.max_revisions
-        else:
-            return self.get_revision_count(self.critique.idea_id) < self.max_revisions
+        return self.revisions.can_revise()
 
     @computed_field
     @property
@@ -150,51 +231,39 @@ class VentureForgeState(BaseModel):
     @property
     def approved_pitches(self) -> list[PitchBrief]:
         """Pitches that passed 100% of the Critic rubric checks."""
-        # Check critiques history and current critique
-        all_critiques = list(self.critiques)
-        if self.critique is not None:
-            all_critiques.append(self.critique)
-
-        # Map idea_id to latest critique
-        latest_by_idea: dict[UUID, Critique] = {c.idea_id: c for c in all_critiques}
-
-        approved: list[PitchBrief] = []
-        for brief in self.pitch_briefs:
-            crit = latest_by_idea.get(brief.idea_id)
-            if crit is not None and crit.all_pass:
-                approved.append(brief)
-        return approved
+        approved_ids = self.revisions.approved_idea_ids
+        return [b for b in self.pitch_briefs if b.idea_id in approved_ids]
 
     @computed_field
     @property
     def quarantined_pitches(self) -> list[PitchBrief]:
         """Pitches that failed one or more rubric checks after maximum revisions."""
-        all_critiques = list(self.critiques)
-        if self.critique is not None:
-            all_critiques.append(self.critique)
+        quarantined_ids = self.revisions.quarantined_idea_ids
+        return [b for b in self.pitch_briefs if b.idea_id in quarantined_ids]
 
-        latest_by_idea: dict[UUID, Critique] = {c.idea_id: c for c in all_critiques}
+    # -----------------------------------------------------------------
+    # Revision query accessor (plain property — not serialised)
+    # -----------------------------------------------------------------
+    @property
+    def revisions(self) -> RevisionLedger:
+        """Read-only query interface over all revision-tracking state.
 
-        quarantined: list[PitchBrief] = []
-        for brief in self.pitch_briefs:
-            crit = latest_by_idea.get(brief.idea_id)
-            if (
-                crit is not None
-                and not crit.all_pass
-                and (
-                    crit.approval_status == "max_revisions_reached"
-                    or self.get_revision_count(brief.idea_id) >= self.max_revisions
-                )
-            ):
-                quarantined.append(brief)
-        return quarantined
+        Use this instead of accessing critique / critiques / revision_counts
+        / revision_feedback / pain_point_miner_revision_count directly.
+        Not a computed_field — RevisionLedger is not serialised by LangGraph.
+        """
+        return RevisionLedger(self)
 
     # -----------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------
     def get_revision_count(self, idea_id: UUID) -> int:
-        """Return the number of revisions already done for a specific idea."""
-        return self.revision_counts.get(str(idea_id), 0)
+        """Return the number of revisions already done for a specific idea.
+
+        Prefer ``state.revisions.count(idea_id)`` for new code.
+        Kept for backward compatibility with existing tests.
+        """
+        return self.revisions.count(idea_id)
 
     def increment_revision_count(self, idea_id: UUID) -> "VentureForgeState":
         """Return a new state with incremented revision count."""
