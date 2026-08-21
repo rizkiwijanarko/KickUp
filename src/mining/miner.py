@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Sequence
 
+from src.mining.cache import SQLiteEvidenceCache
 from src.mining.provider import RawEvidence, SourceProvider
 from src.mining.providers.hackernews import HackerNewsProvider
 from src.mining.providers.producthunt import ProductHuntProvider
@@ -32,6 +33,8 @@ class CompositeDataMiner:
         self,
         providers: Sequence[SourceProvider] | None = None,
         sla_timeout_s: float = DEFAULT_INGESTION_SLA_SECONDS,
+        cache: SQLiteEvidenceCache | None = None,
+        use_cache: bool = True,
     ) -> None:
         if providers is None:
             self.providers: list[SourceProvider] = [
@@ -44,6 +47,8 @@ class CompositeDataMiner:
         else:
             self.providers = list(providers)
         self.sla_timeout_s = sla_timeout_s
+        self.cache = cache if cache is not None else (SQLiteEvidenceCache() if use_cache else None)
+        self.use_cache = use_cache
 
     def get_available_providers(self) -> list[SourceProvider]:
         """Return list of providers whose dependencies / API keys are configured."""
@@ -54,15 +59,22 @@ class CompositeDataMiner:
         domain: str,
         limit_per_source: int = 50,
         min_total_evidence: int = 15,
+        force_refresh: bool = False,
     ) -> list[RawEvidence]:
         """
         Extract grounded evidence across providers concurrently within the SLA timeout budget.
 
-        1. Launches concurrent fetches across all available providers.
-        2. Bounded by self.sla_timeout_s (default 5.0s).
+        1. Checks SQLite evidence cache unless force_refresh is True.
+        2. Launches concurrent fetches across all available providers bounded by SLA timeout.
         3. Deduplicates results by URL and ranks by composite engagement score.
         4. Triggers Hybrid Evidence Augmentation if live items < HYBRID_AUGMENTATION_THRESHOLD.
+        5. Saves final evidence to SQLite cache for future runs.
         """
+        if self.cache and not force_refresh:
+            cached = self.cache.get(domain)
+            if cached:
+                return cached
+
         available = self.get_available_providers()
         skipped = [p.name for p in self.providers if not p.is_available()]
         if skipped:
@@ -86,12 +98,13 @@ class CompositeDataMiner:
             thread_name_prefix="miner_worker",
         )
         future_to_provider = {
-            executor.submit(p.fetch, domain, limit=limit_per_source): p
-            for p in available
+            executor.submit(p.fetch, domain, limit=limit_per_source): p for p in available
         }
 
         try:
-            for future in concurrent.futures.as_completed(future_to_provider, timeout=self.sla_timeout_s):
+            for future in concurrent.futures.as_completed(
+                future_to_provider, timeout=self.sla_timeout_s
+            ):
                 provider = future_to_provider[future]
                 try:
                     items = future.result()
@@ -101,9 +114,13 @@ class CompositeDataMiner:
                             seen_urls.add(item.url)
                             all_evidence.append(item)
                             new_count += 1
-                    logger.info(f"[CompositeDataMiner] Provider '{provider.name}' returned {new_count} valid items.")
+                    logger.info(
+                        f"[CompositeDataMiner] Provider '{provider.name}' returned {new_count} valid items."
+                    )
                 except Exception as exc:
-                    logger.warning(f"[CompositeDataMiner] Provider '{provider.name}' raised an error: {exc}")
+                    logger.warning(
+                        f"[CompositeDataMiner] Provider '{provider.name}' raised an error: {exc}"
+                    )
         except concurrent.futures.TimeoutError:
             elapsed = time.monotonic() - t0
             pending = [p.name for f, p in future_to_provider.items() if not f.done()]
@@ -132,6 +149,9 @@ class CompositeDataMiner:
                 if synth.url not in seen_urls:
                     seen_urls.add(synth.url)
                     all_evidence.append(synth)
+
+        if self.cache and all_evidence:
+            self.cache.set(domain, all_evidence)
 
         logger.info(
             f"[CompositeDataMiner] Finished in {elapsed:.2f}s: Extracted {len(all_evidence)} total "
@@ -184,7 +204,6 @@ class CompositeDataMiner:
                 metadata={"synthetic": True},
             ),
         ]
-
 
     @staticmethod
     def validate_quote(quote: str, evidence: list[RawEvidence]) -> RawEvidence | None:

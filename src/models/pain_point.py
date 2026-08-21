@@ -20,7 +20,7 @@ class PainPointRubric(BaseModel):
     @computed_field
     @property
     def all_pass(self) -> bool:
-        return all(self.model_dump(exclude={'all_pass'}).values())
+        return all(self.model_dump(exclude={"all_pass"}).values())
 
 
 class PainPointEvidence(BaseModel):

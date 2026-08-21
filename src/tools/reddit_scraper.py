@@ -9,13 +9,13 @@ Uses Reddit's official API via PRAW library:
 Requires: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET in environment
 Get credentials at: https://www.reddit.com/prefs/apps
 """
+
 from __future__ import annotations
 
 import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Iterator
 
 import diskcache
 import praw
@@ -43,9 +43,21 @@ _SEARCH_QUERIES: list[str] = [
     "biggest problem self:yes",
 ]
 _TITLE_KEYWORDS: list[str] = [
-    "frustrated", "hate", "annoying", "problem", "issue",
-    "struggle", "pain", "wish", "difficult", "terrible",
-    "awful", "bad", "sucks", "complaint", "worst",
+    "frustrated",
+    "hate",
+    "annoying",
+    "problem",
+    "issue",
+    "struggle",
+    "pain",
+    "wish",
+    "difficult",
+    "terrible",
+    "awful",
+    "bad",
+    "sucks",
+    "complaint",
+    "worst",
 ]
 _MAX_POSTS_PER_SUBREDDIT: int = 5
 _MAX_COMMENTS_PER_POST: int = 10
@@ -58,22 +70,34 @@ _TIME_WINDOW: str = "month"
 # Community map — ordered most-specific → most-general
 # ------------------------------------------------------------------
 COMMUNITY_MAP: dict[str, list[str]] = {
-    "developer_tools":     ["devops", "sysadmin", "webdev", "programming", "SaaS", "startups"],
-    "healthcare":          ["physicaltherapy", "healthIT", "nursing", "medicine", "dentistry"],
-    "finance_fintech":     ["financialindependence", "personalfinance", "smallbusiness", "Entrepreneur"],
-    "education":           ["Homeschooling", "highereducation", "edtech", "Teachers", "studying"],
-    "food_service":        ["restaurantowners", "KitchenConfidential", "smallbusiness", "Entrepreneur"],
-    "e_commerce":          ["shopify", "ecommerce", "marketing", "smallbusiness", "Entrepreneur"],
-    "marketing_social":    ["SEO", "marketing", "socialmedia", "advertising", "startups"],
-    "real_estate":         ["Landlord", "realestateinvesting", "RealEstate", "smallbusiness"],
-    "transportation":      ["trucking", "UberDrivers", "cars", "dashcam", "smallbusiness"],
-    "ai_ml":               ["LocalLLaMA", "artificial", "MachineLearning", "SaaS", "startups"],
-    "productivity":        ["Notion", "ObsidianMD", "productivity", "Entrepreneur", "smallbusiness"],
-    "fashion_retail":      ["fashion", "malefashionadvice", "femalefashionadvice", "smallbusiness"],
-    "sports_fitness":      ["CrossFit", "yoga", "running", "loseit", "fitness"],
-    "agriculture":         ["farming", "homestead", "Agriculture", "smallbusiness"],
-    "content_creator":     ["SmallYTChannel", "NewTubers", "podcasting", "VideoEditing", "YouTubers", "ContentCreation"],
-    "general_other":       ["Entrepreneur", "smallbusiness", "startups", "SaaS"],
+    "developer_tools": ["devops", "sysadmin", "webdev", "programming", "SaaS", "startups"],
+    "healthcare": ["physicaltherapy", "healthIT", "nursing", "medicine", "dentistry"],
+    "finance_fintech": [
+        "financialindependence",
+        "personalfinance",
+        "smallbusiness",
+        "Entrepreneur",
+    ],
+    "education": ["Homeschooling", "highereducation", "edtech", "Teachers", "studying"],
+    "food_service": ["restaurantowners", "KitchenConfidential", "smallbusiness", "Entrepreneur"],
+    "e_commerce": ["shopify", "ecommerce", "marketing", "smallbusiness", "Entrepreneur"],
+    "marketing_social": ["SEO", "marketing", "socialmedia", "advertising", "startups"],
+    "real_estate": ["Landlord", "realestateinvesting", "RealEstate", "smallbusiness"],
+    "transportation": ["trucking", "UberDrivers", "cars", "dashcam", "smallbusiness"],
+    "ai_ml": ["LocalLLaMA", "artificial", "MachineLearning", "SaaS", "startups"],
+    "productivity": ["Notion", "ObsidianMD", "productivity", "Entrepreneur", "smallbusiness"],
+    "fashion_retail": ["fashion", "malefashionadvice", "femalefashionadvice", "smallbusiness"],
+    "sports_fitness": ["CrossFit", "yoga", "running", "loseit", "fitness"],
+    "agriculture": ["farming", "homestead", "Agriculture", "smallbusiness"],
+    "content_creator": [
+        "SmallYTChannel",
+        "NewTubers",
+        "podcasting",
+        "VideoEditing",
+        "YouTubers",
+        "ContentCreation",
+    ],
+    "general_other": ["Entrepreneur", "smallbusiness", "startups", "SaaS"],
 }
 
 # Build a keyword → category reverse index for free-text matching
@@ -204,7 +228,9 @@ def _post_title_matches(post_data: dict) -> bool:
     return any(kw in title for kw in _TITLE_KEYWORDS)
 
 
-def _extract_top_level_comments(comments_listing: dict, post_title: str, subreddit: str) -> list[ScrapedComment]:
+def _extract_top_level_comments(
+    comments_listing: dict, post_title: str, subreddit: str
+) -> list[ScrapedComment]:
     """Walk top-level (depth-0) comments.  Skip AutoModerator / deleted."""
     out: list[ScrapedComment] = []
     for child in comments_listing.get("data", {}).get("children", []):
@@ -299,7 +325,11 @@ def fetch_post_comments(subreddit: str, post_id: str) -> tuple[str, list[Scraped
                 body = comment.body.strip()
                 if not body or len(body) < 30:
                     continue
-                if comment.author and comment.author.name.lower() in {"automoderator", "[deleted]", "deleted"}:
+                if comment.author and comment.author.name.lower() in {
+                    "automoderator",
+                    "[deleted]",
+                    "deleted",
+                }:
                     continue
 
                 url = f"https://www.reddit.com{comment.permalink}"
@@ -334,7 +364,9 @@ def fetch_post_comments(subreddit: str, post_id: str) -> tuple[str, list[Scraped
     return post_title, comments
 
 
-def scrape_subreddit(subreddit: str, cap: int = _MAX_COMMENTS_PER_SUBREDDIT) -> list[ScrapedComment]:
+def scrape_subreddit(
+    subreddit: str, cap: int = _MAX_COMMENTS_PER_SUBREDDIT
+) -> list[ScrapedComment]:
     """Scrape a single subreddit, returning verbatim top-level comments."""
     all_comments: list[ScrapedComment] = []
     seen: set[str] = set()
@@ -383,7 +415,9 @@ def scrape_for_domain(domain: str, max_total_comments: int = 200) -> list[Scrape
             break
         batch = scrape_subreddit(sr, cap=max_total_comments - len(all_comments))
         all_comments.extend(batch)
-        logger.info(f"[reddit] r/{sr}: scraped {len(batch)} comments (running total {len(all_comments)})")
+        logger.info(
+            f"[reddit] r/{sr}: scraped {len(batch)} comments (running total {len(all_comments)})"
+        )
 
     logger.info(f"[reddit] finished with {len(all_comments)} comments")
     return all_comments
@@ -408,9 +442,7 @@ def validate_quote(raw_quote: str, comments: list[ScrapedComment]) -> tuple[bool
 
     # Relaxed: strip asterisks, angle brackets, collapse whitespace
     def _clean(text: str) -> str:
-        return " ".join(
-            text.replace("*", "").replace(">", "").replace("#", "").split()
-        )
+        return " ".join(text.replace("*", "").replace(">", "").replace("#", "").split())
 
     c_stripped = _clean(stripped)
     for c in comments:

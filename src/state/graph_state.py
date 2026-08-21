@@ -105,6 +105,14 @@ class RevisionLedger:
             )
         )
 
+    def pending_briefs(self, pitch_briefs: list[PitchBrief]) -> list[PitchBrief]:
+        """Return briefs that have not been approved and have not reached max revisions."""
+        approved = self.approved_idea_ids
+        quarantined = self.quarantined_idea_ids
+        return [
+            b for b in pitch_briefs if b.idea_id not in approved and b.idea_id not in quarantined
+        ]
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -301,7 +309,15 @@ class VentureForgeState(BaseModel):
     def merge_patches(*patches: dict[str, Any]) -> dict[str, Any]:
         """Merge multiple state patches, concatenating list fields and merging dict fields."""
         result: dict[str, Any] = {}
-        list_fields = {"events", "error_log", "critiques", "pain_points", "ideas", "scored_ideas", "pitch_briefs"}
+        list_fields = {
+            "events",
+            "error_log",
+            "critiques",
+            "pain_points",
+            "ideas",
+            "scored_ideas",
+            "pitch_briefs",
+        }
         dict_fields = {"revision_counts", "agent_timings"}
 
         for patch in patches:
@@ -342,7 +358,10 @@ class VentureForgeState(BaseModel):
             patch["pain_point_miner_revision_count"] = self.pain_point_miner_revision_count + 1
         else:
             idea_id = str(critique.idea_id)
-            updated_counts = {**self.revision_counts, idea_id: self.revision_counts.get(idea_id, 0) + 1}
+            updated_counts = {
+                **self.revision_counts,
+                idea_id: self.revision_counts.get(idea_id, 0) + 1,
+            }
             patch["revision_counts"] = updated_counts
 
         return patch
@@ -392,29 +411,33 @@ class VentureForgeState(BaseModel):
 
         if target == "pain_point_miner":
             # Strict downstream invalidation cascade: re-mining pain points invalidates all downstream ideas
-            updates.update({
-                "pain_points": [],
-                "ideas": [],
-                "scored_ideas": [],
-                "pitch_briefs": [],
-                "critique": None,
-                "current_critique_index": 0,
-            })
+            updates.update(
+                {
+                    "pain_points": [],
+                    "ideas": [],
+                    "scored_ideas": [],
+                    "pitch_briefs": [],
+                    "critique": None,
+                }
+            )
         elif target == "idea_generator":
             filtered_ideas = [i for i in self.ideas if i.id != idea_id]
             filtered_scored = [s for s in self.scored_ideas if s.idea_id != idea_id]
             filtered_briefs = [b for b in self.pitch_briefs if b.idea_id != idea_id]
-            updates.update({
-                "ideas": filtered_ideas,
-                "scored_ideas": filtered_scored,
-                "pitch_briefs": filtered_briefs,
-                "critique": None,
-            })
+            updates.update(
+                {
+                    "ideas": filtered_ideas,
+                    "scored_ideas": filtered_scored,
+                    "pitch_briefs": filtered_briefs,
+                    "critique": None,
+                }
+            )
         elif target == "pitch_writer":
             filtered_briefs = [b for b in self.pitch_briefs if b.idea_id != idea_id]
-            updates.update({
-                "pitch_briefs": filtered_briefs,
-                "critique": None,
-                "current_critique_index": 0,
-            })
+            updates.update(
+                {
+                    "pitch_briefs": filtered_briefs,
+                    "critique": None,
+                }
+            )
         return updates

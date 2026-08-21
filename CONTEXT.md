@@ -72,3 +72,15 @@ _Avoid_: Padding, fallback blend
 The synthesis pattern of grouping multiple distinct verbatim quotes across sources into a single validated Pain Point with 2+ grounded evidence references.
 _Avoid_: Grouping, complaint bundling
 
+**In-Place Revision Refinement**:
+The reflection protocol where worker agents receive their previous generated output alongside Critic feedback and failing checks to surgically modify flawed dimensions while preserving passing sections.
+_Avoid_: Blind regeneration, full rewrite, clean-slate retry
+
+**Approval-Driven Critique Dispatch**:
+The routing mechanism that iterates through pitch briefs based on their unapproved status in the Revision Ledger rather than sequential integer array indexing, preventing redundant re-evaluations.
+_Avoid_: Sequential critique index, array index iteration
+
+**Evidence Cache**:
+The SQLite-backed persistence layer for raw mined posts and comments with time-to-live (TTL) expiration to eliminate redundant scraper network calls across pipeline runs.
+_Avoid_: Temporary memory cache, scraper cache, local dump
+

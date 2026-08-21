@@ -4,18 +4,20 @@ Fast, deterministic, offline by mocking the LLM.
 Run with:
     uv run test_idea_generator_component.py
 """
+
 from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from src.agents.idea_generator import run as run_idea_generator
-from src.state.schema import DataSource, Idea, PainPoint, PainPointRubric, PipelineStage, VentureForgeState
+from src.state.schema import DataSource, Idea, VentureForgeState
+from test.test_helpers import make_test_pain_point
 
 logging.basicConfig(level=logging.INFO)
-from test.test_helpers import make_test_pain_point
 
 
 def _make_minimal_state() -> VentureForgeState:
@@ -153,4 +155,3 @@ if __name__ == "__main__":
         import sys
 
         sys.exit(1)
-

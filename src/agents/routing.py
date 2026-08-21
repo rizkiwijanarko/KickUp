@@ -75,10 +75,12 @@ def _should_write_pitches(state: VentureForgeState) -> bool:
 def _should_critique(state: VentureForgeState) -> bool:
     if not state.pitch_briefs:
         return False
+    pending = state.revisions.pending_briefs(state.pitch_briefs)
+    if not pending:
+        return False
     if state.critique is None:
         return True
-    current_brief = state.pitch_briefs[min(state.current_critique_index, len(state.pitch_briefs) - 1)]
-    return state.critique.idea_id != current_brief.idea_id
+    return state.critique.idea_id not in {b.idea_id for b in pending}
 
 
 def _should_revise(state: VentureForgeState) -> bool:
@@ -144,7 +146,9 @@ def route(state: VentureForgeState) -> dict[str, Any]:
     # 4. Scorer reflection or pitch writing ------------------------------
     if state.scored_ideas and not state.top_scored_ideas and not state.pitch_briefs:
         if state.can_revise:
-            logger.warning("[routing] All ideas parked by Scorer. Requesting revision from idea_generator.")
+            logger.warning(
+                "[routing] All ideas parked by Scorer. Requesting revision from idea_generator."
+            )
             return {
                 "ideas": [],
                 "scored_ideas": [],
@@ -162,7 +166,9 @@ def route(state: VentureForgeState) -> dict[str, Any]:
                     message="All ideas parked by Scorer. Requesting new ideas from idea_generator.",
                 ),
             }
-        logger.warning("[routing] All ideas parked and max revisions reached. Graduating best candidate.")
+        logger.warning(
+            "[routing] All ideas parked and max revisions reached. Graduating best candidate."
+        )
         return {
             "current_stage": PipelineStage.WRITING,
             "next_node": "pitch_writer",
@@ -208,10 +214,10 @@ def route(state: VentureForgeState) -> dict[str, Any]:
             ),
         }
 
-    # 6. More briefs to critique? ----------------------------------------
-    if state.current_critique_index + 1 < len(state.pitch_briefs):
+    # 6. More pending briefs to critique? --------------------------------
+    pending_briefs = state.revisions.pending_briefs(state.pitch_briefs)
+    if pending_briefs:
         return {
-            "current_critique_index": state.current_critique_index + 1,
             "critique": None,
             "current_stage": PipelineStage.CRITIQUING,
             "next_node": "critic",
@@ -219,7 +225,7 @@ def route(state: VentureForgeState) -> dict[str, Any]:
                 agent="orchestrator",
                 stage=PipelineStage.CRITIQUING,
                 kind="info",
-                message=f"Moving to critique brief {state.current_critique_index + 2} of {len(state.pitch_briefs)}.",
+                message=f"Moving to critique next pending brief ({len(state.pitch_briefs) - len(pending_briefs) + 1} of {len(state.pitch_briefs)}).",
             ),
         }
 

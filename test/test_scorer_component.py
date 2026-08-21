@@ -4,6 +4,7 @@ Tests parsing edge cases and validation paths without hitting the real LLM.
 Run with:
     uv run test_scorer_component.py
 """
+
 from __future__ import annotations
 
 import json
@@ -15,13 +16,7 @@ from uuid import uuid4
 from src.agents.scorer import run as run_scorer
 from src.state.schema import (
     DataSource,
-    DemandRubric,
-    FatalFlaw,
-    FeasibilityRubric,
     Idea,
-    NoveltyRubric,
-    PainPoint,
-    PainPointRubric,
     PipelineStage,
     ScoredIdea,
     VentureForgeState,
@@ -114,7 +109,11 @@ def _make_scored_response(
             "has_path_out_of_niche": n2,
         },
         "core_assumption": "Developers will adopt a tool that simplifies Docker Compose management.",
-        "fatal_flaws": (flaws if flaws is not None else [{"flaw": "Incumbents may copy quickly.", "severity": "major"}]),
+        "fatal_flaws": (
+            flaws
+            if flaws is not None
+            else [{"flaw": "Incumbents may copy quickly.", "severity": "major"}]
+        ),
         "yes_count": yes_count,
         "total_checks": 8,
         "verdict": verdict,
@@ -126,6 +125,7 @@ def _make_scored_response(
 # ------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------
+
 
 def test_no_ideas_returns_empty() -> None:
     """If state has no ideas, scorer should return empty scored_ideas."""
@@ -145,10 +145,32 @@ def test_wellformed_response_produces_scored_ideas() -> None:
     with patch("src.agents.scorer.get_llm") as mock_get_llm:
         fake_llm = MagicMock()
         fake_response = MagicMock()
-        fake_response.content = json.dumps([
-            _make_scored_response(idea_a.id, f1=True, f2=True, f3=True, d1=True, d2=True, d3=True, n1=True, n2=True),
-            _make_scored_response(idea_b.id, f1=True, f2=False, f3=True, d1=True, d2=False, d3=True, n1=False, n2=True),
-        ])
+        fake_response.content = json.dumps(
+            [
+                _make_scored_response(
+                    idea_a.id,
+                    f1=True,
+                    f2=True,
+                    f3=True,
+                    d1=True,
+                    d2=True,
+                    d3=True,
+                    n1=True,
+                    n2=True,
+                ),
+                _make_scored_response(
+                    idea_b.id,
+                    f1=True,
+                    f2=False,
+                    f3=True,
+                    d1=True,
+                    d2=False,
+                    d3=True,
+                    n1=False,
+                    n2=True,
+                ),
+            ]
+        )
         fake_llm.invoke.return_value = fake_response
         mock_get_llm.return_value = fake_llm
 
@@ -225,7 +247,9 @@ def test_rubric_yes_no_strings_coerced() -> None:
     assert s.feasibility_rubric.can_be_solved_manually_first is True
     assert s.feasibility_rubric.has_schlep_or_unsexy_advantage is False
     assert s.demand_rubric.is_painkiller_not_vitamin is False
-    assert s.yes_count == 6  # 3 True from feasibility + 2 True from demand + 2 True from novelty = 7? Let me count:
+    assert (
+        s.yes_count == 6
+    )  # 3 True from feasibility + 2 True from demand + 2 True from novelty = 7? Let me count:
     # feasibility: yes, no, yes = 2
     # demand: yes, no, yes = 2
     # novelty: yes, yes = 2
@@ -259,6 +283,7 @@ def test_fatal_flaw_overrides_verdict() -> None:
 def test_live_llm_produces_valid_scored_ideas() -> None:
     """Uses real API call. Requires OPENAI_API_KEY in environment."""
     import os
+
     if not os.getenv("OPENAI_API_KEY"):
         print("  SKIP (no OPENAI_API_KEY)")
         return
@@ -269,7 +294,9 @@ def test_live_llm_produces_valid_scored_ideas() -> None:
     scored: list[ScoredIdea] = result["scored_ideas"]
     assert len(scored) > 0, f"Expected at least 1 scored idea, got {len(scored)}"
     for s in scored:
-        assert isinstance(s.idea_id, type(state.ideas[0].id)), f"Invalid idea_id type: {type(s.idea_id)}"
+        assert isinstance(s.idea_id, type(state.ideas[0].id)), (
+            f"Invalid idea_id type: {type(s.idea_id)}"
+        )
         assert s.yes_count >= 0 and s.yes_count <= 8
         assert s.verdict in (Verdict.PURSUE, Verdict.EXPLORE, Verdict.PARK)
         assert s.rank is not None and s.rank >= 1
@@ -304,6 +331,7 @@ if __name__ == "__main__":
             passed += 1
         except Exception as e:
             import traceback
+
             print(f"  FAIL: {e}")
             traceback.print_exc()
             failed += 1
@@ -313,4 +341,5 @@ if __name__ == "__main__":
     print("=" * 60)
     if failed:
         import sys
+
         sys.exit(1)

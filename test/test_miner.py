@@ -2,9 +2,10 @@ from src.mining import CompositeDataMiner, RawEvidence
 from src.models import DataSource
 
 
-
 class FakeSourceProvider:
-    def __init__(self, name: str, source_type: DataSource, available: bool, items: list[RawEvidence]) -> None:
+    def __init__(
+        self, name: str, source_type: DataSource, available: bool, items: list[RawEvidence]
+    ) -> None:
         self._name = name
         self._source_type = source_type
         self._available = available
@@ -79,7 +80,6 @@ def test_composite_miner_with_mock_providers():
     synthetic_count = sum(1 for e in evidence if e.metadata.get("synthetic"))
     assert synthetic_count == 4
 
-
     # Validate quote helper
     found = miner.validate_quote("excruciatingly slow", evidence)
     assert found is not None
@@ -100,7 +100,9 @@ def test_composite_miner_engagement_sorting_and_no_augmentation():
         )
         for i in range(10)
     ]
-    p = FakeSourceProvider(name="hackernews", source_type=DataSource.HACKERNEWS, available=True, items=items)
+    p = FakeSourceProvider(
+        name="hackernews", source_type=DataSource.HACKERNEWS, available=True, items=items
+    )
     miner = CompositeDataMiner(providers=[p])
     evidence = miner.mine("developer tools")
 
@@ -112,4 +114,3 @@ def test_composite_miner_engagement_sorting_and_no_augmentation():
     assert scores == sorted(scores, reverse=True)
     assert scores[0] == 90
     assert scores[-1] == 0
-

@@ -9,6 +9,7 @@ Run:
 Tip: set DOMAIN env var to override the default domain.
 Requires: YOUTUBE_API_KEY in .env
 """
+
 from __future__ import annotations
 
 import os
@@ -124,7 +125,9 @@ def test_scrape_for_domain_real_api() -> None:
 
         # Check all comments have complaint signals
         for comment in comments:
-            assert yts._has_complaint_signal(comment.text), f"No complaint signal in: {comment.text[:50]}"
+            assert yts._has_complaint_signal(comment.text), (
+                f"No complaint signal in: {comment.text[:50]}"
+            )
 
     print(f"  PASS (scraped {len(comments)} comments)")
 
@@ -254,7 +257,7 @@ def test_summarize_sample_comments() -> None:
             video_id = c.url.split("watch?v=")[1].split("&")[0]
             video_ids.add(video_id)
 
-    print(f"  Sample statistics:")
+    print("  Sample statistics:")
     print(f"    Total comments: {len(comments)}")
     print(f"    Unique videos: {len(video_ids)}")
     print(f"    Avg length: {avg_len:.1f} chars")

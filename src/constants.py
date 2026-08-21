@@ -117,6 +117,18 @@ DEFAULT_MAX_TOKENS = 4096
 # Request timeout in seconds
 DEFAULT_REQUEST_TIMEOUT = 120
 
+# Default maximum concurrency for parallel generation tasks
+DEFAULT_LLM_MAX_CONCURRENCY = 5
+
+# Diverse creative theme angles for parallel idea generation
+IDEA_THEME_ANGLES: list[str] = [
+    "Direct Workflow Automation & B2B SaaS (eliminating repetitive manual toil, streamlining pipelines)",
+    "Vertical Niche Platform & Specialized Tooling (tailored deeply to a single industry/persona's quirks)",
+    "Developer Infrastructure & API-First Services (headless primitives, observability, composable architecture)",
+    "Consumer / Community-Driven Experience (habit-forming UX, social proof, decentralized collaboration)",
+    "Unsexy Schlep & Operational Technology (heavy lifting, messy real-world integration, compliance/governance)",
+]
+
 # =============================================================================
 # RETRY & BACKOFF
 # =============================================================================
@@ -175,8 +187,7 @@ ERROR_NO_SCORED_IDEAS = (
 )
 
 ERROR_PITCH_GENERATION_FAILED = (
-    "Failed to generate pitch brief after {attempts} attempts. "
-    "Last error: {error}"
+    "Failed to generate pitch brief after {attempts} attempts. Last error: {error}"
 )
 
 ERROR_LLM_TIMEOUT = (
@@ -185,39 +196,24 @@ ERROR_LLM_TIMEOUT = (
 )
 
 ERROR_INVALID_JSON_RESPONSE = (
-    "LLM returned invalid JSON. Expected format: {expected_format}. "
-    "Received: {received}"
+    "LLM returned invalid JSON. Expected format: {expected_format}. Received: {received}"
 )
 
 # Critic-specific errors
-ERROR_CRITIC_LLM_INVOCATION_FAILED = (
-    "Critic LLM invocation failed: {error}"
-)
+ERROR_CRITIC_LLM_INVOCATION_FAILED = "Critic LLM invocation failed: {error}"
 
-ERROR_CRITIC_JSON_EXTRACTION_FAILED = (
-    "Failed to extract valid JSON from Critic LLM response"
-)
+ERROR_CRITIC_JSON_EXTRACTION_FAILED = "Failed to extract valid JSON from Critic LLM response"
 
-ERROR_CRITIC_PARSE_FAILED = (
-    "Failed to parse critique: {error}"
-)
+ERROR_CRITIC_PARSE_FAILED = "Failed to parse critique: {error}"
 
-WARNING_CRITIC_NO_BRIEFS = (
-    "No pitch briefs available for critique"
-)
+WARNING_CRITIC_NO_BRIEFS = "No pitch briefs available for critique"
 
 # Scorer-specific errors
-ERROR_SCORER_LLM_INVOCATION_FAILED = (
-    "Scorer LLM invocation failed: {error}"
-)
+ERROR_SCORER_LLM_INVOCATION_FAILED = "Scorer LLM invocation failed: {error}"
 
-ERROR_SCORER_JSON_EXTRACTION_FAILED = (
-    "Failed to extract valid JSON from Scorer LLM response"
-)
+ERROR_SCORER_JSON_EXTRACTION_FAILED = "Failed to extract valid JSON from Scorer LLM response"
 
-WARNING_SCORER_NO_IDEAS = (
-    "No ideas available for scoring"
-)
+WARNING_SCORER_NO_IDEAS = "No ideas available for scoring"
 
 # =============================================================================
 # LOGGING

@@ -14,7 +14,6 @@ from src.models import (
     DemandRubric,
     FatalFlaw,
     FeasibilityRubric,
-    Idea,
     NoveltyRubric,
     PainPoint,
     PainPointEvidence,
@@ -22,7 +21,6 @@ from src.models import (
     PitchBrief,
     ScoredIdea,
     ValidationPlan,
-    Verdict,
 )
 
 
@@ -89,7 +87,9 @@ def test_scored_idea_verdict_derivation():
             can_be_solved_manually_first=True,
             has_schlep_or_unsexy_advantage=True,
             can_2_3_team_build_mvp_in_6_months=True,
-        ) if False else FeasibilityRubric(
+        )
+        if False
+        else FeasibilityRubric(
             can_be_solved_manually_first=True,
             has_schlep_or_unsexy_advantage=True,
             can_2_3_person_team_build_mvp_in_6_months=True,
@@ -285,4 +285,3 @@ def test_approved_and_quarantined_pitches_segregation():
 
     assert len(state.quarantined_pitches) == 1
     assert state.quarantined_pitches[0].title == "Quarantined Tool"
-

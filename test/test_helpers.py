@@ -2,6 +2,7 @@
 Test helper to create pain points with the new evidence structure.
 Use this in test files instead of manually creating PainPoint objects.
 """
+
 from uuid import uuid4
 from src.state.schema import PainPoint, PainPointEvidence, PainPointRubric, DataSource
 
@@ -16,7 +17,7 @@ def make_test_pain_point(
     additional_evidence: list[tuple[str, str, DataSource]] = None,
 ) -> PainPoint:
     """Create a test pain point with evidence structure.
-    
+
     Args:
         title: Pain point title
         description: Pain point description
@@ -25,7 +26,7 @@ def make_test_pain_point(
         source: Primary evidence source
         passes_rubric: Whether rubric passes
         additional_evidence: List of (url, quote, source) tuples for extra evidence
-    
+
     Returns:
         PainPoint with evidence array
     """
@@ -37,7 +38,7 @@ def make_test_pain_point(
             source=source,
         )
     ]
-    
+
     # Add additional evidence if provided
     if additional_evidence:
         for url, quote, src in additional_evidence:
@@ -48,7 +49,7 @@ def make_test_pain_point(
                     source=src,
                 )
             )
-    
+
     return PainPoint(
         id=uuid4(),
         title=title,
@@ -72,7 +73,7 @@ def make_test_pain_point_dict(
     additional_evidence: list[dict] = None,
 ) -> dict:
     """Create a test pain point dict (for LLM response mocking).
-    
+
     Returns dict in the format the LLM would return.
     """
     evidence = [
@@ -82,10 +83,10 @@ def make_test_pain_point_dict(
             "source": source,
         }
     ]
-    
+
     if additional_evidence:
         evidence.extend(additional_evidence)
-    
+
     return {
         "id": str(uuid4()),
         "title": title,

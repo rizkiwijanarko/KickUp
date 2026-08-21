@@ -39,24 +39,16 @@ def validate_pain_point(
         InvalidPainPointError: If validation fails
     """
     if not description or len(description.strip()) < MIN_PAIN_POINT_LENGTH:
-        raise InvalidPainPointError(
-            f"Description too short (min {MIN_PAIN_POINT_LENGTH} chars)"
-        )
+        raise InvalidPainPointError(f"Description too short (min {MIN_PAIN_POINT_LENGTH} chars)")
 
     if not source_url or not source_url.startswith(("http://", "https://")):
-        raise InvalidPainPointError(
-            f"Invalid source URL: {source_url}"
-        )
+        raise InvalidPainPointError(f"Invalid source URL: {source_url}")
 
     if len(source_url) > MAX_URL_LENGTH:
-        raise InvalidPainPointError(
-            f"Source URL too long (max {MAX_URL_LENGTH} chars)"
-        )
+        raise InvalidPainPointError(f"Source URL too long (max {MAX_URL_LENGTH} chars)")
 
     if raw_quote is not None and not raw_quote.strip():
-        raise InvalidPainPointError(
-            "Raw quote provided but empty"
-        )
+        raise InvalidPainPointError("Raw quote provided but empty")
 
 
 def validate_idea(
@@ -76,19 +68,13 @@ def validate_idea(
         InvalidIdeaError: If validation fails
     """
     if not description or len(description.strip()) < MIN_IDEA_DESCRIPTION_LENGTH:
-        raise InvalidIdeaError(
-            f"Description too short (min {MIN_IDEA_DESCRIPTION_LENGTH} chars)"
-        )
+        raise InvalidIdeaError(f"Description too short (min {MIN_IDEA_DESCRIPTION_LENGTH} chars)")
 
     if not pain_point_ids or len(pain_point_ids) < MIN_PAIN_POINTS_PER_IDEA:
-        raise InvalidIdeaError(
-            f"Must address at least {MIN_PAIN_POINTS_PER_IDEA} pain points"
-        )
+        raise InvalidIdeaError(f"Must address at least {MIN_PAIN_POINTS_PER_IDEA} pain points")
 
     if one_liner is not None and not one_liner.strip():
-        raise InvalidIdeaError(
-            "One-liner provided but empty"
-        )
+        raise InvalidIdeaError("One-liner provided but empty")
 
 
 def validate_pitch_brief(
@@ -106,19 +92,16 @@ def validate_pitch_brief(
         InvalidPitchError: If validation fails
     """
     if not content or len(content.strip()) < MIN_PITCH_BRIEF_LENGTH:
-        raise InvalidPitchError(
-            f"Content too short (min {MIN_PITCH_BRIEF_LENGTH} chars)"
-        )
+        raise InvalidPitchError(f"Content too short (min {MIN_PITCH_BRIEF_LENGTH} chars)")
 
     if sections:
         missing_sections = [
-            section for section in REQUIRED_PITCH_SECTIONS
+            section
+            for section in REQUIRED_PITCH_SECTIONS
             if section not in sections or not sections[section].strip()
         ]
         if missing_sections:
-            raise InvalidPitchError(
-                f"Missing required sections: {', '.join(missing_sections)}"
-            )
+            raise InvalidPitchError(f"Missing required sections: {', '.join(missing_sections)}")
 
 
 def validate_url(url: str, field_name: str = "URL") -> None:
@@ -136,14 +119,10 @@ def validate_url(url: str, field_name: str = "URL") -> None:
         raise InvalidPainPointError(f"{field_name} is required")
 
     if not url.startswith(("http://", "https://")):
-        raise InvalidPainPointError(
-            f"{field_name} must start with http:// or https://"
-        )
+        raise InvalidPainPointError(f"{field_name} must start with http:// or https://")
 
     if len(url) > MAX_URL_LENGTH:
-        raise InvalidPainPointError(
-            f"{field_name} too long (max {MAX_URL_LENGTH} chars)"
-        )
+        raise InvalidPainPointError(f"{field_name} too long (max {MAX_URL_LENGTH} chars)")
 
 
 def validate_required_field(
@@ -202,13 +181,9 @@ def validate_score_threshold(
         True if score >= threshold, False otherwise
     """
     if score < 0 or score > max_score:
-        raise ValueError(
-            f"Score {score} out of range [0, {max_score}]"
-        )
+        raise ValueError(f"Score {score} out of range [0, {max_score}]")
 
     if threshold < 0 or threshold > max_score:
-        raise ValueError(
-            f"Threshold {threshold} out of range [0, {max_score}]"
-        )
+        raise ValueError(f"Threshold {threshold} out of range [0, {max_score}]")
 
     return score >= threshold

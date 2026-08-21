@@ -34,8 +34,9 @@ from src.state.graph_state import VentureForgeState
 logger = logging.getLogger(__name__)
 
 
-def _serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[dict[str, Any]]:
-    """Serialize evidence items to compact dict format for LLM prompt."""
+def _serialize_evidence(evidence: list[RawEvidence], limit: int = 15) -> list[dict[str, Any]]:
+    """Serialize highest-scored evidence items to compact dict format for LLM prompt."""
+    sorted_evidence = sorted(evidence, key=lambda x: getattr(x, "score", 0), reverse=True)
     return [
         {
             "text": item.text[:COMMENT_TEXT_MAX_LENGTH],
@@ -44,7 +45,7 @@ def _serialize_evidence(evidence: list[RawEvidence], limit: int = 45) -> list[di
             "post_title": item.title[:POST_TITLE_MAX_LENGTH] if item.title else "",
             "score": item.score,
         }
-        for item in evidence[:limit]
+        for item in sorted_evidence[:limit]
     ]
 
 
@@ -52,11 +53,11 @@ def _build_system_prompt() -> str:
     """Build system prompt for pain point extraction."""
     base_prompt = get_prompt("pain_point_miner")
     json_instruction = (
-        "\n\n**CRITICAL: Output ONLY the JSON array. "
-        "No markdown code fences, no explanations, no preamble. "
-        "Start with [ and end with ].**"
+        "Output a raw JSON array of pain points. "
+        "Do NOT wrap in markdown code blocks like ```json ... ```. "
+        "Ensure all quotes and source URLs are grounded in the provided comments."
     )
-    return base_prompt + json_instruction
+    return f"{base_prompt}\n\n{json_instruction}"
 
 
 def _build_user_prompt(
@@ -65,25 +66,38 @@ def _build_user_prompt(
     evidence: list[dict[str, Any]],
     revision_feedback: str | None = None,
 ) -> str:
-    """Build user prompt for pain point extraction."""
-    feedback = revision_feedback or "None"
+    """Build user prompt with serialized evidence and clustering instructions."""
+    evidence_block = "\n".join(
+        f"[{i+1}] ({item['source'].upper()}) URL: {item['url']}\n"
+        f"Context: {item['post_title']}\n"
+        f"Comment: \"{item['text']}\"\n"
+        for i, item in enumerate(evidence)
+    )
+
+    revision_context = ""
+    if revision_feedback:
+        revision_context = (
+            f"\n\nCRITICAL REVISION INSTRUCTIONS (from previous evaluation):\n"
+            f"{revision_feedback}\n"
+            "Adjust your extraction and clustering to resolve these specific critiques."
+        )
 
     return (
-        f"Extract up to {max_pain_points} high-signal, clustered pain points from the "
-        f"{len(evidence)} comments below.\n"
-        f"Domain: {domain}\n"
-        f"Revision feedback (if any): {feedback}\n\n"
-        f"COMMENTS (ranked by engagement):\n{json.dumps(evidence, indent=2)}\n\n"
-        "Return a JSON array of clustered pain points. Each pain point MUST include:\n"
-        "- id: (UUID string)\n"
+        f"Domain: {domain}\n\n"
+        f"Real User Comments ({len(evidence)} items):\n"
+        f"{evidence_block}\n"
+        f"{revision_context}\n\n"
+        "Instructions:\n"
+        "Extract grounded, clustered pain points from the comments above. "
+        "Return a JSON array of objects with these fields:\n"
         "- title: (5-10 words summarizing the pain point)\n"
         "- description: (1-2 sentences explaining the problem)\n"
-        "- rubric: {\"is_genuine_current_frustration\": true, \"has_verbatim_quote\": true, \"user_segment_specific\": true}\n"
+        '- rubric: {"is_genuine_current_frustration": true, "has_verbatim_quote": true, "user_segment_specific": true}\n'
         "- passes_rubric: true\n"
         "- evidence: array of 1-10 evidence objects, where each object has:\n"
         "    * source_url: exact URL from the comments above\n"
         "    * raw_quote: EXACT verbatim substring from that comment's text\n"
-        "    * source: data source enum (\"hackernews\", \"producthunt\", \"web\", \"reddit\", or \"youtube\")\n\n"
+        '    * source: data source enum ("hackernews", "producthunt", "web", "reddit", or "youtube")\n\n'
         "Rules:\n"
         "1. Cluster similar complaints together — prefer pain points with 2+ evidence items.\n"
         "2. Every raw_quote MUST be an exact literal substring of the provided comments.\n"
@@ -98,7 +112,7 @@ def _call_llm_for_pain_points(
     revision_feedback: str | None = None,
 ) -> str:
     """Invoke LLM to extract structured pain points from evidence."""
-    llm = get_llm(temperature=0.2, max_tokens=16384, reasoning=False)
+    llm = get_llm(temperature=0.2, max_tokens=4096, reasoning=False)
     serialized = _serialize_evidence(evidence)
 
     messages = [
@@ -137,22 +151,36 @@ def _parse_llm_response(response_content: str) -> list[dict[str, Any]]:
             for val in data.values():
                 if isinstance(val, list):
                     return val
-            return [data]
         return []
     except Exception as e:
         logger.warning(f"[pain_point_miner] JSON parse error: {e}")
         raise LLMJSONParseError(raw_response=response_content, parse_error=str(e)) from e
 
 
+def _clean_text_for_matching(text: str) -> str:
+    """Normalize text for fuzzy-exact quote verification."""
+    normalized = text.replace("’", "'").replace("“", '"').replace("”", '"')
+    import re
+    return " ".join(re.sub(r"[^\w\s]", " ", normalized).lower().split())
 
-def _verify_quote_against_corpus(quote: str, corpus: list[RawEvidence]) -> bool:
-    """Check if quote or cleaned quote exists in raw evidence texts."""
-    clean_quote = " ".join(quote.replace("*", "").replace(">", "").replace('"', "").split()).lower()
-    if not clean_quote or len(clean_quote) < 5:
+
+def _verify_quote_against_corpus(quote: str, clean_corpus: list[str]) -> bool:
+    """Check if quote or cleaned quote exists in pre-cleaned raw evidence texts."""
+    clean_q = _clean_text_for_matching(quote)
+    if not clean_q or len(clean_q) < 4:
         return False
-    for item in corpus:
-        clean_text = " ".join(item.text.replace("*", "").replace(">", "").replace('"', "").split()).lower()
-        if clean_quote in clean_text or clean_quote[:30] in clean_text:
+    words = clean_q.split()
+    if len(words) >= 3:
+        # Check 3-word sliding window
+        for i in range(len(words) - 2):
+            window = " ".join(words[i : i + 3])
+            for text in clean_corpus:
+                if window in text:
+                    return True
+    # Fallback to direct substring or 15-char prefix
+    prefix = clean_q[:15]
+    for text in clean_corpus:
+        if clean_q in text or prefix in text:
             return True
     return False
 
@@ -163,6 +191,11 @@ def _convert_to_pain_points(
 ) -> list[PainPoint]:
     """Convert raw parsed dictionaries to validated PainPoint instances with quote verification."""
     pain_points: list[PainPoint] = []
+    clean_corpus = (
+        [_clean_text_for_matching(item.text) for item in evidence_corpus]
+        if evidence_corpus
+        else []
+    )
 
     for item in raw_items:
         try:
@@ -180,12 +213,14 @@ def _convert_to_pain_points(
                         ev_src_enum = DataSource(ev_src)
                     except ValueError:
                         ev_src_enum = DataSource.WEB
-                    
+
                     raw_quote = ev.get("raw_quote", "Quote unavailable")
                     # Validate quote against corpus if corpus is provided
-                    if evidence_corpus:
-                        if not _verify_quote_against_corpus(raw_quote, evidence_corpus):
-                            logger.info(f"[pain_point_miner] Dropping ungrounded secondary quote: {raw_quote[:40]}...")
+                    if clean_corpus:
+                        if not _verify_quote_against_corpus(raw_quote, clean_corpus):
+                            logger.info(
+                                f"[pain_point_miner] Dropping ungrounded secondary quote: {raw_quote[:40]}..."
+                            )
                             continue
 
                     evidence_objects.append(
@@ -197,8 +232,8 @@ def _convert_to_pain_points(
                     )
             else:
                 raw_quote = item.get("raw_quote", item.get("description", ""))
-                if evidence_corpus:
-                    if _verify_quote_against_corpus(raw_quote, evidence_corpus):
+                if clean_corpus:
+                    if _verify_quote_against_corpus(raw_quote, clean_corpus):
                         evidence_objects.append(
                             PainPointEvidence(
                                 source_url=item.get("source_url", "https://news.ycombinator.com"),
@@ -216,7 +251,9 @@ def _convert_to_pain_points(
                     )
 
             if not evidence_objects:
-                logger.warning(f"[pain_point_miner] Skipping item '{item.get('title', '')}' — no verified quotes found.")
+                logger.warning(
+                    f"[pain_point_miner] Skipping item '{item.get('title', '')}' — no verified quotes found."
+                )
                 continue
 
             raw_id = item.get("id")
@@ -232,7 +269,9 @@ def _convert_to_pain_points(
 
             rubric_dict = coerce_rubric_bools(item.get("rubric", {}))
             rubric = PainPointRubric(
-                is_genuine_current_frustration=rubric_dict.get("is_genuine_current_frustration", True),
+                is_genuine_current_frustration=rubric_dict.get(
+                    "is_genuine_current_frustration", True
+                ),
                 has_verbatim_quote=rubric_dict.get("has_verbatim_quote", True),
                 user_segment_specific=rubric_dict.get("user_segment_specific", True),
             )
@@ -327,7 +366,9 @@ def run(state: VentureForgeState) -> dict[str, Any]:
 
     # Handle reflection revision vs standard additive mode
     if state.revision_feedback:
-        logger.info("[pain_point_miner] Revision mode activated. Updating pain points with fresh extractions.")
+        logger.info(
+            "[pain_point_miner] Revision mode activated. Updating pain points with fresh extractions."
+        )
         final = extracted[:max_pain_points] if extracted else state.pain_points[:max_pain_points]
     else:
         existing_titles = {p.title.lower() for p in state.pain_points}
@@ -344,4 +385,3 @@ def run(state: VentureForgeState) -> dict[str, Any]:
             message=f"Extracted {len(final)} validated pain points for domain '{state.domain}'.",
         ),
     }
-

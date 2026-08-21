@@ -4,6 +4,7 @@ Domain models for pitch briefs, competitive landscape, and validation plans.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 

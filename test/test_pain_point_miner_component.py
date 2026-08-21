@@ -2,6 +2,7 @@
 
 Fast, deterministic, offline by mocking the DataMiner + LLM.
 """
+
 from __future__ import annotations
 
 import json
@@ -84,7 +85,7 @@ def test_wellformed_llm_response_extracts_pain_points() -> None:
 def test_multi_evidence_clustering_and_quote_filtering() -> None:
     state = VentureForgeState(domain="developer tools", max_pain_points=5)
     evidence = _make_evidence()
-    
+
     mock_payload = [
         {
             "id": str(uuid4()),
@@ -130,6 +131,11 @@ def test_multi_evidence_clustering_and_quote_filtering() -> None:
     assert len(pps) == 1
     # 2 grounded quotes preserved, 1 hallucinated quote dropped
     assert len(pps[0].evidence) == 2
-    assert pps[0].evidence[0].raw_quote == "I spend more time debugging docker-compose.yml than writing actual code."
-    assert pps[0].evidence[1].raw_quote == "Why does my test pass locally but fail in CI with the exact same Dockerfile?"
-
+    assert (
+        pps[0].evidence[0].raw_quote
+        == "I spend more time debugging docker-compose.yml than writing actual code."
+    )
+    assert (
+        pps[0].evidence[1].raw_quote
+        == "Why does my test pass locally but fail in CI with the exact same Dockerfile?"
+    )

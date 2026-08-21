@@ -2,9 +2,9 @@
 
 Tests parsing edge cases and validation paths without hitting the real LLM.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -18,7 +18,6 @@ from src.state.schema import (
     FeasibilityRubric,
     Idea,
     NoveltyRubric,
-    PainPoint,
     PitchBrief,
     ScoredIdea,
     ValidationPlan,
@@ -202,7 +201,9 @@ def test_revision_count_increments() -> None:
 
 def test_tagline_auto_trimming() -> None:
     """Test that taglines longer than 12 words are auto-trimmed cleanly."""
-    long_tagline = "This is a very long and detailed tagline that has far more than twelve words in it"
+    long_tagline = (
+        "This is a very long and detailed tagline that has far more than twelve words in it"
+    )
     brief = PitchBrief(
         idea_id=uuid4(),
         title="Test App",
@@ -218,7 +219,13 @@ def test_tagline_auto_trimming() -> None:
         ),
         differentiation="Much better and faster than existing alternatives with real-time feedback.",
         validation_plan=ValidationPlan(
-            discovery_questions=["Question one for discovery?", "Question two for discovery?", "Question three for discovery?", "Question four for discovery?", "Question five for discovery?"],
+            discovery_questions=[
+                "Question one for discovery?",
+                "Question two for discovery?",
+                "Question three for discovery?",
+                "Question four for discovery?",
+                "Question five for discovery?",
+            ],
             validation_criteria="Clear validation criteria that proves the customer pain point is acute.",
         ),
         business_model="SaaS subscription model.",
@@ -236,7 +243,9 @@ def test_best_effort_graduation_when_all_ideas_parked() -> None:
     """When top_scored_ideas is empty but scored_ideas exists (all parked), pitch_writer picks highest score."""
     state = _make_minimal_state()
     idea = state.ideas[0]
-    parked_scored = state.scored_ideas[0].model_copy(update={"verdict": Verdict.PARK, "yes_count": 4})
+    parked_scored = state.scored_ideas[0].model_copy(
+        update={"verdict": Verdict.PARK, "yes_count": 4}
+    )
     state = state.model_copy(update={"scored_ideas": [parked_scored]})
 
     assert len(state.top_scored_ideas) == 0

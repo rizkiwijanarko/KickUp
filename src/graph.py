@@ -63,6 +63,7 @@ def timed(
     Returns a closure that calls fn(state), merges the agent_timings
     patch, and preserves the original function name for LangGraph.
     """
+
     def _wrapper(state: VentureForgeState) -> dict[str, Any]:
         t0 = time.monotonic()
         result = fn(state)
@@ -84,7 +85,9 @@ def get_checkpointer(db_path: str | None = DEFAULT_CHECKPOINT_DB_PATH) -> BaseCh
             logger.info(f"[graph] Initialized SqliteSaver checkpoint persistence at '{db_path}'.")
             return SqliteSaver(conn, serde=serde)
         except Exception as e:
-            logger.warning(f"[graph] Failed to initialize SQLite checkpointer at '{db_path}': {e}. Using MemorySaver.")
+            logger.warning(
+                f"[graph] Failed to initialize SQLite checkpointer at '{db_path}': {e}. Using MemorySaver."
+            )
     return MemorySaver(serde=serde)
 
 
@@ -105,10 +108,10 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> StateGraph:
     # Register nodes — workers are wrapped with timed() at the wiring site
     workflow.add_node("orchestrator", orchestrator)
     workflow.add_node("pain_point_miner", timed("pain_point_miner", pain_point_miner_agent.run))
-    workflow.add_node("idea_generator",   timed("idea_generator",   idea_generator_agent.run))
-    workflow.add_node("scorer",           timed("scorer",           scorer_agent.run))
-    workflow.add_node("pitch_writer",     timed("pitch_writer",     pitch_writer_agent.run))
-    workflow.add_node("critic",           timed("critic",           critic_agent.run))
+    workflow.add_node("idea_generator", timed("idea_generator", idea_generator_agent.run))
+    workflow.add_node("scorer", timed("scorer", scorer_agent.run))
+    workflow.add_node("pitch_writer", timed("pitch_writer", pitch_writer_agent.run))
+    workflow.add_node("critic", timed("critic", critic_agent.run))
 
     # Entry point
     workflow.set_entry_point("orchestrator")

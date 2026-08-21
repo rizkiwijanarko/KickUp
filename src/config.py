@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     default_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1)
     request_timeout: int = Field(default=120, ge=1)
+    llm_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Max concurrent LLM requests for parallel generation",
+    )
 
     # ------------------------------------------------------------------
     # Reddit — NOT required.  We use public `.json` endpoints (no PRAW).

@@ -7,13 +7,10 @@ Web interface for the autonomous multi-agent startup discovery system.
 import json
 import time
 from pathlib import Path
-from typing import Literal
 
 import gradio as gr
 from src.config import settings
-from src.main import make_initial_state
 from src.run_controller import (
-    is_cancel_requested,
     is_run_active,
     poll_state,
     request_cancel,
@@ -57,14 +54,14 @@ def download_pain_points(state) -> str:
     """Generate downloadable markdown file for pain points."""
     if not state or not state.pain_points:
         return None
-    
+
     content = f"# Pain Points - {state.domain}\n\n"
     content += f"**Run ID:** {state.run_id}\n"
     content += f"**Total Pain Points:** {len(state.pain_points)}\n"
     content += f"**Passed Rubric:** {len(state.filtered_pain_points)}\n\n"
     content += "---\n\n"
     content += format_pain_points(state)
-    
+
     # Save to temp file
     output_path = Path(settings.cache_dir) / f"pain_points_{state.run_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,13 +73,13 @@ def download_ideas(state) -> str:
     """Generate downloadable markdown file for ideas."""
     if not state or not state.ideas:
         return None
-    
+
     content = f"# Startup Ideas - {state.domain}\n\n"
     content += f"**Run ID:** {state.run_id}\n"
     content += f"**Total Ideas:** {len(state.ideas)}\n\n"
     content += "---\n\n"
     content += format_ideas(state)
-    
+
     output_path = Path(settings.cache_dir) / f"ideas_{state.run_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8")
@@ -93,13 +90,13 @@ def download_scored_ideas(state) -> str:
     """Generate downloadable markdown file for scored ideas."""
     if not state or not state.scored_ideas:
         return None
-    
+
     content = f"# Scored Ideas - {state.domain}\n\n"
     content += f"**Run ID:** {state.run_id}\n"
     content += f"**Total Scored Ideas:** {len(state.scored_ideas)}\n\n"
     content += "---\n\n"
     content += format_scored_ideas(state)
-    
+
     output_path = Path(settings.cache_dir) / f"scored_ideas_{state.run_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8")
@@ -110,14 +107,14 @@ def download_pitches(state) -> str:
     """Generate downloadable markdown file for pitch briefs."""
     if not state or not state.pitch_briefs:
         return None
-    
+
     content = f"# Pitch Briefs - {state.domain}\n\n"
     content += f"**Run ID:** {state.run_id}\n"
     content += f"**Approved Pitches:** {len(state.approved_pitches)}\n"
     content += f"**Quarantined Pitches:** {len(state.quarantined_pitches)}\n\n"
     content += "---\n\n"
     content += format_pitches(state)
-    
+
     output_path = Path(settings.cache_dir) / f"pitches_{state.run_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8")
@@ -148,7 +145,7 @@ def format_state_summary(state) -> str:
     }
 
     emoji = status_emoji.get(state.current_stage, "❓")
-    
+
     # Build visual pipeline progress
     pipeline_stages = [
         ("⛏️ Mining", PipelineStage.MINING, len(state.pain_points) > 0),
@@ -157,7 +154,7 @@ def format_state_summary(state) -> str:
         ("✍️ Writing", PipelineStage.WRITING, len(state.pitch_briefs) > 0),
         ("🔍 Critiquing", PipelineStage.CRITIQUING, len(state.critiques) > 0),
     ]
-    
+
     progress_bar = []
     completed_count = 0
     for label, stage, completed in pipeline_stages:
@@ -168,20 +165,20 @@ def format_state_summary(state) -> str:
             completed_count += 1
         else:
             progress_bar.append(f"⬜ {label}")  # Not started
-    
+
     progress_line = " → ".join(progress_bar)
-    
+
     # Calculate progress percentage
     total_stages = len(pipeline_stages)
     progress_pct = int((completed_count / total_stages) * 100)
-    
+
     # Format agent timings
     timing_lines = []
     if state.agent_timings:
         for agent, duration in state.agent_timings.items():
             timing_lines.append(f"  - {agent}: {duration:.1f}s")
     timing_str = "\n".join(timing_lines) if timing_lines else "  No timings yet"
-    
+
     # Recent events (last 3)
     event_lines = []
     if state.events:
@@ -189,7 +186,7 @@ def format_state_summary(state) -> str:
             event_emoji = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}.get(event.kind, "📝")
             event_lines.append(f"  {event_emoji} **{event.agent}**: {event.message}")
     event_str = "\n".join(event_lines) if event_lines else "  No events yet"
-    
+
     return (
         f"## {emoji} Current Stage: {state.current_stage.value.upper()}\n\n"
         f"### Pipeline Progress ({progress_pct}% complete)\n"
@@ -217,26 +214,25 @@ def format_pain_points(state) -> str:
 
     output = []
     for i, pp in enumerate(state.pain_points, 1):
-        evidence_count = len(pp.evidence) if hasattr(pp, 'evidence') else 1
+        evidence_count = len(pp.evidence) if hasattr(pp, "evidence") else 1
         output.append(
             f"### {i}. {pp.title} ({evidence_count} source{'s' if evidence_count > 1 else ''})\n"
             f"**Description:** {pp.description}\n"
             f"**Passes Rubric:** {pp.passes_rubric}\n\n"
         )
-        
+
         # Show all evidence sources
-        if hasattr(pp, 'evidence') and pp.evidence:
+        if hasattr(pp, "evidence") and pp.evidence:
             output.append("**Evidence:**\n")
             for j, ev in enumerate(pp.evidence, 1):
                 output.append(
-                    f"{j}. [{ev.source.value}]({ev.source_url})\n"
-                    f"   > \"{ev.raw_quote}\"\n\n"
+                    f'{j}. [{ev.source.value}]({ev.source_url})\n   > "{ev.raw_quote}"\n\n'
                 )
         else:
             # Backward compatibility
             output.append(
                 f"**Source:** {pp.source.value} | [Link]({pp.source_url})\n"
-                f"**Quote:** \"{pp.raw_quote}\"\n\n"
+                f'**Quote:** "{pp.raw_quote}"\n\n'
             )
     return "".join(output)
 
@@ -320,11 +316,13 @@ def format_pitches(state) -> str:
 
     if approved:
         output.append(f"# 🏆 Approved Pitch Briefs ({len(approved)})\n\n")
-        output.append("> **Investor Ready**: These startup pitch briefs have passed 100% of the Critic's binary verification rubrics.\n\n")
+        output.append(
+            "> **Investor Ready**: These startup pitch briefs have passed 100% of the Critic's binary verification rubrics.\n\n"
+        )
         for i, pitch in enumerate(approved, 1):
             output.append(
                 f"## {i}. {pitch.title} `[APPROVED - 100% VERIFIED]`\n\n"
-                f"**Tagline:** *\"{pitch.tagline}\"*\n\n"
+                f'**Tagline:** *"{pitch.tagline}"*\n\n'
                 f"**Target User:** {pitch.target_user} | **Revisions:** {pitch.revision_count}\n\n"
             )
             if pitch.evidence_links:
@@ -336,7 +334,9 @@ def format_pitches(state) -> str:
 
     if quarantined:
         output.append(f"# ⚠️ Quarantined Pitch Briefs ({len(quarantined)})\n\n")
-        output.append("> **Review Required**: These briefs reached maximum reflection revisions without satisfying all Critic rubric checks. Preserved below with flaw diagnostics.\n\n")
+        output.append(
+            "> **Review Required**: These briefs reached maximum reflection revisions without satisfying all Critic rubric checks. Preserved below with flaw diagnostics.\n\n"
+        )
         latest_critiques = {c.idea_id: c for c in state.critiques}
         for i, pitch in enumerate(quarantined, 1):
             crit = latest_critiques.get(pitch.idea_id)
@@ -346,7 +346,7 @@ def format_pitches(state) -> str:
             feedback_str = crit.revision_feedback if crit else "Unresolved critique check."
             output.append(
                 f"## {i}. {pitch.title} `[QUARANTINED - AUDIT REQUIRED]`\n\n"
-                f"**Tagline:** *\"{pitch.tagline}\"*\n\n"
+                f'**Tagline:** *"{pitch.tagline}"*\n\n'
                 f"**Target User:** {pitch.target_user} | **Revisions Attempted:** {pitch.revision_count}\n\n"
                 f"**Diagnostic Flaw Report:**\n"
                 f"{failing_str}\n\n"
@@ -404,12 +404,12 @@ def format_logs(state) -> str:
     """Format pipeline events as logs for display."""
     if not state or not state.events:
         return "No logs yet. Start a pipeline to see logs."
-    
+
     output = []
     for event in state.events:
         # Format timestamp
-        timestamp = event.timestamp.strftime("%H:%M:%S") if hasattr(event, 'timestamp') else "N/A"
-        
+        timestamp = event.timestamp.strftime("%H:%M:%S") if hasattr(event, "timestamp") else "N/A"
+
         # Emoji for event kind
         kind_emoji = {
             "info": "ℹ️",
@@ -417,19 +417,21 @@ def format_logs(state) -> str:
             "error": "❌",
             "success": "✅",
         }.get(event.kind, "📝")
-        
+
         # Format stage
-        stage = event.stage.value if hasattr(event.stage, 'value') else str(event.stage)
-        
+        stage = event.stage.value if hasattr(event.stage, "value") else str(event.stage)
+
         # Build log line
-        log_line = f"[{timestamp}] {kind_emoji} [{event.agent.upper()}] [{stage.upper()}] {event.message}"
-        
+        log_line = (
+            f"[{timestamp}] {kind_emoji} [{event.agent.upper()}] [{stage.upper()}] {event.message}"
+        )
+
         # Add idea_id if present
-        if hasattr(event, 'idea_id') and event.idea_id:
+        if hasattr(event, "idea_id") and event.idea_id:
             log_line += f" (idea: {str(event.idea_id)[:8]}...)"
-        
+
         output.append(log_line)
-    
+
     return "\n".join(output)
 
 
@@ -445,7 +447,7 @@ def export_markdown(state) -> str:
     if state is None:
         return ""
 
-    md = f"# VentureForge Report\n\n"
+    md = "# VentureForge Report\n\n"
     md += f"**Domain:** {state.domain}\n"
     md += f"**Run ID:** {state.run_id}\n"
     md += f"**Final Stage:** {state.current_stage}\n\n"
@@ -576,26 +578,16 @@ def update_progress(run_id: str) -> tuple[str, str, str, str, str, str, str]:
 
         # Send notifications for important stage transitions
         if current_stage == PipelineStage.COMPLETED:
-            gr.Info(
-                f"✅ Pipeline completed! Generated {len(state.pitch_briefs)} pitch brief(s)."
-            )
+            gr.Info(f"✅ Pipeline completed! Generated {len(state.pitch_briefs)} pitch brief(s).")
         elif current_stage == PipelineStage.FAILED:
-            gr.Warning(f"❌ Pipeline failed. Check the error log for details.")
+            gr.Warning("❌ Pipeline failed. Check the error log for details.")
         elif current_stage == PipelineStage.CANCELLED:
             gr.Info("🛑 Pipeline cancelled by user.")
-        elif (
-            current_stage == PipelineStage.GENERATING
-            and len(state.pain_points) > 0
-        ):
-            gr.Info(
-                f"⛏️ Mining complete! Found {len(state.pain_points)} pain points."
-            )
+        elif current_stage == PipelineStage.GENERATING and len(state.pain_points) > 0:
+            gr.Info(f"⛏️ Mining complete! Found {len(state.pain_points)} pain points.")
         elif current_stage == PipelineStage.SCORING and len(state.ideas) > 0:
             gr.Info(f"💡 Generated {len(state.ideas)} startup ideas.")
-        elif (
-            current_stage == PipelineStage.WRITING
-            and len(state.scored_ideas) > 0
-        ):
+        elif current_stage == PipelineStage.WRITING and len(state.scored_ideas) > 0:
             gr.Info(f"📊 Scored {len(state.scored_ideas)} ideas.")
 
     return (
@@ -621,11 +613,11 @@ def clear_cache() -> str:
     """Clear the LangGraph checkpoint cache and scraper caches."""
     import shutil
     from pathlib import Path
-    
+
     # Check if any runs are active
     if is_run_active():
         return "❌ Cannot clear cache while a run is active. Please stop the run first."
-    
+
     cache_dir = Path(settings.cache_dir)
     if cache_dir.exists():
         try:
@@ -634,7 +626,7 @@ def clear_cache() -> str:
             # Recreate empty cache directory
             cache_dir.mkdir(parents=True, exist_ok=True)
             return "✅ Cache cleared successfully! All previous run data has been deleted."
-        except PermissionError as e:
+        except PermissionError:
             return f"❌ Cache is locked (database in use). Stop the app and clear manually: rm -rf {cache_dir}"
         except Exception as e:
             return f"❌ Error clearing cache: {str(e)}"
@@ -665,7 +657,7 @@ def create_ui() -> gr.Blocks:
                     label="Domain Recommendations",
                     info="Select a recommended domain or type your own below",
                 )
-                
+
                 domain_input = gr.Textbox(
                     label="Domain",
                     placeholder="e.g., developer tools, healthcare, fintech",
@@ -707,10 +699,10 @@ def create_ui() -> gr.Blocks:
                     step=1,
                     label="Max Revisions",
                 )
-        
+
         run_id_display = gr.Textbox(label="Run ID", interactive=False, visible=True)
 
-        with gr.Tabs() as tabs:
+        with gr.Tabs():
             with gr.TabItem("📊 Progress"):
                 progress_display = gr.Markdown("No active run")
 
@@ -760,7 +752,7 @@ def create_ui() -> gr.Blocks:
 
             with gr.TabItem("🔍 Critiques"):
                 critiques_display = gr.Markdown("No critiques yet")
-            
+
             with gr.TabItem("📋 Logs"):
                 logs_display = gr.Textbox(
                     label="Pipeline Logs",
@@ -778,8 +770,8 @@ def create_ui() -> gr.Blocks:
                 export_output = gr.Code(label="Exported Data", language="json", interactive=False)
 
         status_message = gr.Textbox(
-            label="Status", 
-            interactive=False, 
+            label="Status",
+            interactive=False,
             visible=True,
             value="Ready to start. Select a domain and click 'Start Discovery'.",
         )
@@ -790,7 +782,7 @@ def create_ui() -> gr.Blocks:
             inputs=[domain_recommendation],
             outputs=[domain_input],
         )
-        
+
         start_btn.click(
             fn=start_pipeline,
             inputs=[domain_input, max_pain_points, ideas_per_run, top_n_pitches, max_revisions],
@@ -834,7 +826,7 @@ def create_ui() -> gr.Blocks:
                 logs_display,
             ],
         )
-        
+
         # Manual refresh logs button
         refresh_logs_btn.click(
             fn=lambda rid: format_logs(poll_state(rid)),
@@ -853,23 +845,23 @@ def create_ui() -> gr.Blocks:
             inputs=[run_id_display],
             outputs=[export_output],
         )
-        
+
         # Download button handlers
         download_pain_points_btn.click(
             fn=lambda rid: download_pain_points(poll_state(rid)),
             inputs=[run_id_display],
         )
-        
+
         download_ideas_btn.click(
             fn=lambda rid: download_ideas(poll_state(rid)),
             inputs=[run_id_display],
         )
-        
+
         download_scored_btn.click(
             fn=lambda rid: download_scored_ideas(poll_state(rid)),
             inputs=[run_id_display],
         )
-        
+
         download_pitches_btn.click(
             fn=lambda rid: download_pitches(poll_state(rid)),
             inputs=[run_id_display],

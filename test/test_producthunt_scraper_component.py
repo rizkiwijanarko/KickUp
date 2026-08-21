@@ -9,11 +9,10 @@ Run:
 Tip: set DOMAIN env var to override the default domain.
 Note: Requires PRODUCT_HUNT_API_KEY in environment for real API tests.
 """
+
 from __future__ import annotations
 
-import json
 import os
-from typing import Any
 
 from src.tools import producthunt_scraper as phs
 
@@ -59,9 +58,13 @@ def test_comment_to_scraped_basic() -> None:
         "createdAt": "2024-01-01T00:00:00Z",
         "user": {"name": "Test User", "username": "testuser"},
     }
-    scraped = phs._comment_to_scraped(comment, "Test Product", "https://producthunt.com/products/test")
+    scraped = phs._comment_to_scraped(
+        comment, "Test Product", "https://producthunt.com/products/test"
+    )
     assert scraped is not None
-    assert scraped.text == "This is a test comment about a productivity tool being frustrating to use."
+    assert (
+        scraped.text == "This is a test comment about a productivity tool being frustrating to use."
+    )
     assert scraped.url == "https://producthunt.com/products/test?comment=12345"
     assert scraped.subreddit == "producthunt"
     assert scraped.post_title == "Test Product"
@@ -73,7 +76,9 @@ def test_comment_to_scraped_basic() -> None:
         "createdAt": "2024-01-01T00:00:00Z",
         "user": {"name": "Test User", "username": "testuser"},
     }
-    scraped_short = phs._comment_to_scraped(short_comment, "Test Product", "https://producthunt.com/products/test")
+    scraped_short = phs._comment_to_scraped(
+        short_comment, "Test Product", "https://producthunt.com/products/test"
+    )
     assert scraped_short is None
 
     # Empty comment
@@ -83,7 +88,9 @@ def test_comment_to_scraped_basic() -> None:
         "createdAt": "2024-01-01T00:00:00Z",
         "user": {"name": "Test User", "username": "testuser"},
     }
-    scraped_empty = phs._comment_to_scraped(empty_comment, "Test Product", "https://producthunt.com/products/test")
+    scraped_empty = phs._comment_to_scraped(
+        empty_comment, "Test Product", "https://producthunt.com/products/test"
+    )
     assert scraped_empty is None
 
     print("  PASS")
@@ -98,7 +105,9 @@ def test_comment_text_cleaning() -> None:
         "createdAt": "2024-01-01T00:00:00Z",
         "user": {"name": "Test User", "username": "testuser"},
     }
-    scraped = phs._comment_to_scraped(comment, "Test Product", "https://producthunt.com/products/test")
+    scraped = phs._comment_to_scraped(
+        comment, "Test Product", "https://producthunt.com/products/test"
+    )
     assert scraped is not None
     assert "   " not in scraped.text
     assert scraped.text == "This has excessive whitespace that should be cleaned."
@@ -286,7 +295,7 @@ def test_summarize_sample_comments() -> None:
         min_len = min(lengths)
         max_len = max(lengths)
 
-        print(f"  Sample statistics:")
+        print("  Sample statistics:")
         print(f"    Total comments: {len(comments)}")
         print(f"    Avg length: {avg_len:.1f} chars")
         print(f"    Min length: {min_len} chars")

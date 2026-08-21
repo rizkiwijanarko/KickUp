@@ -10,15 +10,15 @@ Run with:
 
 For the live LLM test, set environment OPENAI_API_KEY.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from src.agents.critic import _invoke_llm, run as run_critic
+from src.agents.critic import run as run_critic
 from src.state.schema import (
     CompetitiveLandscape,
     Critique,
@@ -29,8 +29,6 @@ from src.state.schema import (
     FeasibilityRubric,
     Idea,
     NoveltyRubric,
-    PainPoint,
-    PainPointRubric,
     PitchBrief,
     PipelineStage,
     ScoredIdea,
@@ -46,6 +44,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Fixture helpers
 # ------------------------------------------------------------------
+
 
 def _make_minimal_state(
     revision_counts: dict | None = None,
@@ -114,7 +113,7 @@ def _make_minimal_state(
         competitive_landscape=CompetitiveLandscape(
             current_behavior="Developers manually edit YAML files and debug via trial-and-error restarts",
             direct_competitors="Docker Desktop, VS Code extensions, and manual YAML editing",
-            real_enemy="The habit of editing raw YAML without validation or visual feedback"
+            real_enemy="The habit of editing raw YAML without validation or visual feedback",
         ),
         differentiation="Visual editor with real-time validation vs manual YAML editing",
         validation_plan=ValidationPlan(
@@ -123,9 +122,9 @@ def _make_minimal_state(
                 "How much time do you spend on Docker Compose configuration weekly?",
                 "What frustrates you most about your current workflow?",
                 "What would make you switch from your current approach?",
-                "How do you currently validate your Docker Compose files?"
+                "How do you currently validate your Docker Compose files?",
             ],
-            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
+            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging",
         ),
         business_model="Monthly SaaS subscription model with freemium tier included.",
         go_to_market="Post on Reddit and Hacker News for early adopters.",
@@ -220,6 +219,7 @@ def _make_malformed_critic_response() -> str:
 # Plain test functions (no pytest / no class wrappers)
 # ------------------------------------------------------------------
 
+
 def test_auto_approve_at_max_revisions() -> None:
     """If revision_counts[idea_id] >= max_revisions, auto-approve with special status."""
     with patch("src.agents.critic.get_structured_llm") as mock_get_llm:
@@ -257,10 +257,16 @@ def test_auto_approve_at_max_revisions() -> None:
         assert "critique" in result, "Expected critique in result"
         critique: Critique = result["critique"]
         # Max revisions reached: all_pass stays False but approval_status changes
-        assert critique.all_pass is False, f"Expected all_pass=False (rubric still failed), got {critique.all_pass}"
-        assert critique.approval_status == "max_revisions_reached", f"Expected max_revisions_reached, got {critique.approval_status}"
+        assert critique.all_pass is False, (
+            f"Expected all_pass=False (rubric still failed), got {critique.all_pass}"
+        )
+        assert critique.approval_status == "max_revisions_reached", (
+            f"Expected max_revisions_reached, got {critique.approval_status}"
+        )
         # Target agent is determined by rubric priority (positioning issues → idea_generator)
-        assert critique.target_agent == "idea_generator", f"Expected idea_generator (positioning issues), got {critique.target_agent}"
+        assert critique.target_agent == "idea_generator", (
+            f"Expected idea_generator (positioning issues), got {critique.target_agent}"
+        )
         assert "Max revisions reached" in critique.revision_feedback
         print("  PASS")
 
@@ -293,7 +299,11 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
             rubric=rubric,
             all_pass=False,
             approval_status="revise",
-            failing_checks=["target_is_contained_fire", "competition_embraced_with_thesis", "minimum_evidence_sources"],
+            failing_checks=[
+                "target_is_contained_fire",
+                "competition_embraced_with_thesis",
+                "minimum_evidence_sources",
+            ],
             target_agent="idea_generator",
             revision_feedback="Target user is too broad and need more evidence sources.",
         )
@@ -308,8 +318,12 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
         critique: Critique = result["critique"]
         assert critique.approval_status == "revise", f"Got status={critique.approval_status}"
         assert critique.all_pass is False
-        assert critique.target_agent == "idea_generator", f"Expected idea_generator, got {critique.target_agent}"
-        assert len(critique.failing_checks) == 3, f"Expected 3 failing checks, got {critique.failing_checks}"
+        assert critique.target_agent == "idea_generator", (
+            f"Expected idea_generator, got {critique.target_agent}"
+        )
+        assert len(critique.failing_checks) == 3, (
+            f"Expected 3 failing checks, got {critique.failing_checks}"
+        )
         assert "target_is_contained_fire" in critique.failing_checks
         assert "competition_embraced_with_thesis" in critique.failing_checks
         assert "minimum_evidence_sources" in critique.failing_checks
@@ -335,6 +349,7 @@ def test_malformed_response_returns_empty_dict() -> None:
 def test_live_llm_produces_valid_critique() -> None:
     """Uses real API call. Requires OPENAI_API_KEY in environment."""
     import os
+
     if not os.getenv("OPENAI_API_KEY"):
         print("  SKIP (no OPENAI_API_KEY)")
         return
@@ -387,6 +402,7 @@ if __name__ == "__main__":
             passed += 1
         except Exception as e:
             import traceback
+
             print(f"  FAIL: {e}")
             traceback.print_exc()
             failed += 1
@@ -396,4 +412,5 @@ if __name__ == "__main__":
     print("=" * 60)
     if failed:
         import sys
+
         sys.exit(1)

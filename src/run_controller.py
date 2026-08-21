@@ -8,6 +8,7 @@ Gradio UI and API consumers can:
 * stream real-time events and step transitions
 * request cancellation (interrupts the LangGraph execution)
 """
+
 from __future__ import annotations
 
 import logging
@@ -91,7 +92,9 @@ def start_run(
                 step_count += 1
                 current_time = time.time()
                 elapsed = current_time - last_step_time
-                logger.info(f"[run_controller] Step {step_count}: {node_name} (took {elapsed:.1f}s)")
+                logger.info(
+                    f"[run_controller] Step {step_count}: {node_name} (took {elapsed:.1f}s)"
+                )
 
                 if elapsed > timeout_seconds:
                     logger.warning(
@@ -109,7 +112,9 @@ def start_run(
                         values=current_state.mark_cancelled("User requested stop"),
                     )
 
-            logger.info(f"[run_controller] Pipeline run {run_id} completed after {step_count} steps")
+            logger.info(
+                f"[run_controller] Pipeline run {run_id} completed after {step_count} steps"
+            )
         except Exception as exc:  # pragma: no cover
             logger.error(f"[run_controller] Pipeline worker crashed: {exc!r}", exc_info=True)
             print(f"[run_controller] Pipeline worker crashed: {exc!r}", flush=True)

@@ -6,6 +6,7 @@ with the pain_point_miner pipeline.
 
 API docs: https://hn.algolia.com/api
 """
+
 from __future__ import annotations
 
 import logging
@@ -133,6 +134,7 @@ def _hit_to_comment(hit: dict) -> ScrapedComment | None:
 
     # Strip HTML tags (HN API returns HTML in comment_text)
     import re
+
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"&[a-z]+;", " ", text)
     text = " ".join(text.split()).strip()
@@ -154,7 +156,6 @@ def _hit_to_comment(hit: dict) -> ScrapedComment | None:
         score=points,
         num_comments=num_comments,
     )
-
 
 
 def scrape_for_domain(domain: str, max_total_comments: int = 150) -> list[ScrapedComment]:

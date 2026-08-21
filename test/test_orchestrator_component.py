@@ -4,9 +4,9 @@ Fast, deterministic, offline (no LLM).
 Run with:
     uv run test_orchestrator_component.py
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from uuid import uuid4
 
@@ -21,8 +21,6 @@ from src.state.schema import (
     FeasibilityRubric,
     Idea,
     NoveltyRubric,
-    PainPoint,
-    PainPointRubric,
     PitchBrief,
     PipelineStage,
     ScoredIdea,
@@ -34,7 +32,9 @@ from test.test_helpers import make_test_pain_point
 logging.basicConfig(level=logging.INFO)
 
 
-def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, revision_count: int = 0) -> VentureForgeState:
+def _make_full_state_with_critique(
+    *, all_pass: bool, max_revisions: int = 2, revision_count: int = 0
+) -> VentureForgeState:
     pp1 = make_test_pain_point(
         title="Docker Compose is hard",
         description="Developers struggle with complex multi-service local development setups.",
@@ -94,7 +94,7 @@ def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, re
         competitive_landscape=CompetitiveLandscape(
             current_behavior="Developers manually edit YAML files and debug via trial-and-error restarts",
             direct_competitors="Docker Desktop, VS Code extensions, and manual YAML editing",
-            real_enemy="The habit of editing raw YAML without validation or visual feedback"
+            real_enemy="The habit of editing raw YAML without validation or visual feedback",
         ),
         differentiation="Visual editor with real-time validation vs manual YAML editing",
         validation_plan=ValidationPlan(
@@ -103,9 +103,9 @@ def _make_full_state_with_critique(*, all_pass: bool, max_revisions: int = 2, re
                 "How much time do you spend on Docker Compose configuration weekly?",
                 "What frustrates you most about your current workflow?",
                 "What would make you switch from your current approach?",
-                "How do you currently validate your Docker Compose files?"
+                "How do you currently validate your Docker Compose files?",
             ],
-            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
+            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging",
         ),
         business_model="Monthly subscription with freemium tier included.",
         go_to_market="Direct outreach to r/docker power users and small teams.",
@@ -225,12 +225,14 @@ def test_orchestrator_best_effort_graduation_when_max_revisions_reached() -> Non
     state = _make_full_state_with_critique(all_pass=False, max_revisions=1, revision_count=0)
     # Remove top scored ideas and pitch briefs, simulate all ideas parked
     parked_scored = state.scored_ideas[0].model_copy(update={"verdict": "park", "yes_count": 3})
-    state = state.model_copy(update={
-        "scored_ideas": [parked_scored],
-        "pitch_briefs": [],
-        "critique": None,
-        "revision_counts": {str(parked_scored.idea_id): 1},  # already revised once
-    })
+    state = state.model_copy(
+        update={
+            "scored_ideas": [parked_scored],
+            "pitch_briefs": [],
+            "critique": None,
+            "revision_counts": {str(parked_scored.idea_id): 1},  # already revised once
+        }
+    )
     assert state.can_revise is False
 
     patch = orchestrator(state)
@@ -242,10 +244,16 @@ def test_orchestrator_best_effort_graduation_when_max_revisions_reached() -> Non
 _TESTS = [
     ("Routes to mining when no pain points", test_routes_to_mining_when_no_pain_points),
     ("Routes to generator when no ideas", test_routes_to_generator_when_no_ideas),
-    ("Reflection loop bumps revision + resets downstream", test_reflection_loop_bumps_revision_and_resets_downstream),
+    (
+        "Reflection loop bumps revision + resets downstream",
+        test_reflection_loop_bumps_revision_and_resets_downstream,
+    ),
     ("Marks completed when critique passes", test_marks_completed_when_critique_passes),
     ("Marks completed when cannot revise", test_marks_completed_when_cannot_revise),
-    ("Best-effort graduation on max revisions", test_orchestrator_best_effort_graduation_when_max_revisions_reached),
+    (
+        "Best-effort graduation on max revisions",
+        test_orchestrator_best_effort_graduation_when_max_revisions_reached,
+    ),
 ]
 
 
@@ -275,4 +283,3 @@ if __name__ == "__main__":
         import sys
 
         sys.exit(1)
-

@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 
 from src.config import settings
-from src.mining.provider import RawEvidence, SourceProvider
+from src.mining.provider import RawEvidence
 from src.models.common import DataSource
 from src.tools.tavily_content_scraper import scrape_for_domain
 

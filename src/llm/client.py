@@ -70,7 +70,9 @@ def get_llm(
         base_params = {**base_params, **extras}
         logger.debug(f"[llm_client] Using {adapter.name} adapter for base_url={base_url!r}")
     else:
-        logger.debug(f"[llm_client] No adapter matched for base_url={base_url!r}; using base params.")
+        logger.debug(
+            f"[llm_client] No adapter matched for base_url={base_url!r}; using base params."
+        )
 
     return ChatOpenAI(**base_params)
 
@@ -116,9 +118,8 @@ def extract_json(text: str) -> dict | list | None:
     text = text.strip()
 
     # Strategy 1: markdown code blocks (```json ... ``` or ``` ... ```)
-    code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
-    if code_block_match:
-        block_text = code_block_match.group(1).strip()
+    for code_match in re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE):
+        block_text = code_match.group(1).strip()
         try:
             return cast(dict | list, json.loads(block_text, strict=False))
         except json.JSONDecodeError:
@@ -128,35 +129,29 @@ def extract_json(text: str) -> dict | list | None:
             except json.JSONDecodeError:
                 pass
 
-    # Strategy 2: outermost structural boundaries
-    start_idx = -1
-    for ch in ("[", "{"):
-        idx = text.find(ch)
-        if idx != -1 and (start_idx == -1 or idx < start_idx):
-            start_idx = idx
-
-    end_idx = -1
-    for ch in ("]", "}"):
-        idx = text.rfind(ch)
-        if idx != -1 and idx > end_idx:
-            end_idx = idx
-
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        candidate = text[start_idx : end_idx + 1]
-        try:
-            return cast(dict | list, json.loads(candidate, strict=False))
-        except json.JSONDecodeError:
-            cleaned = re.sub(r",\s*([\]}])", r"\1", candidate)
-            try:
-                return cast(dict | list, json.loads(cleaned, strict=False))
-            except json.JSONDecodeError:
-                pass
-
-    # Strategy 3: direct fallback
+    # Strategy 2: direct parse
     try:
         return cast(dict | list, json.loads(text, strict=False))
     except json.JSONDecodeError:
-        return None
+        pass
+
+    # Strategy 3: outermost matched structural boundaries (array [ ... ] or object { ... })
+    pairs = [("[", "]"), ("{", "}")]
+    for open_ch, close_ch in pairs:
+        start_idx = text.find(open_ch)
+        end_idx = text.rfind(close_ch)
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            candidate = text[start_idx : end_idx + 1]
+            try:
+                return cast(dict | list, json.loads(candidate, strict=False))
+            except json.JSONDecodeError:
+                cleaned = re.sub(r",\s*([\]}])", r"\1", candidate)
+                try:
+                    return cast(dict | list, json.loads(cleaned, strict=False))
+                except json.JSONDecodeError:
+                    pass
+
+    return None
 
 
 def coerce_yes_no(value: str | bool) -> bool:

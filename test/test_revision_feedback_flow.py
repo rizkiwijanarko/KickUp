@@ -7,13 +7,13 @@ agents respond.
 Run with:
     uv run test_revision_feedback_flow.py
 """
+
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from src.agents.critic import run as run_critic
 from src.agents.idea_generator import run as run_idea_generator
 from src.agents.pitch_writer import run as run_pitch_writer
 from src.state.schema import (
@@ -26,9 +26,6 @@ from src.state.schema import (
     FeasibilityRubric,
     Idea,
     NoveltyRubric,
-    PainPoint,
-    PainPointRubric,
-    PipelineStage,
     PitchBrief,
     ScoredIdea,
     ValidationPlan,
@@ -109,7 +106,7 @@ def _make_base_state() -> VentureForgeState:
         competitive_landscape=CompetitiveLandscape(
             current_behavior="Developers manually edit YAML files and debug via trial-and-error restarts",
             direct_competitors="Docker Desktop, VS Code extensions, and manual YAML editing",
-            real_enemy="The habit of editing raw YAML without validation or visual feedback"
+            real_enemy="The habit of editing raw YAML without validation or visual feedback",
         ),
         differentiation="Visual editor with real-time validation vs manual YAML editing",
         validation_plan=ValidationPlan(
@@ -118,9 +115,9 @@ def _make_base_state() -> VentureForgeState:
                 "How much time do you spend on Docker Compose configuration weekly?",
                 "What frustrates you most about your current workflow?",
                 "What would make you switch from your current approach?",
-                "How do you currently validate your Docker Compose files?"
+                "How do you currently validate your Docker Compose files?",
             ],
-            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging"
+            validation_criteria="At least 7 out of 10 developers mention spending 2+ hours/week on Docker Compose debugging",
         ),
         business_model="SaaS subscription model.",
         go_to_market="Post on Reddit and Hacker News for early adopters.",
@@ -263,7 +260,9 @@ def test_revision_feedback_influences_pitch_writer_prompt() -> None:
     )
 
     # Pretend we've already recorded this critique on state
-    state = state.model_copy(update={"revision_feedback": critique.revision_feedback, "critiques": [critique]})
+    state = state.model_copy(
+        update={"revision_feedback": critique.revision_feedback, "critiques": [critique]}
+    )
 
     captured_prompt: dict[str, str] = {"text": ""}
 
@@ -297,7 +296,7 @@ def test_revision_feedback_influences_pitch_writer_prompt() -> None:
         fake_llm.invoke.side_effect = _fake_invoke
         mock_get_llm.return_value = fake_llm
 
-        result = run_pitch_writer(state)
+        _ = run_pitch_writer(state)
 
     # Even if parsing fails, we still care about the prompt text
     prompt_text = captured_prompt["text"]
@@ -313,8 +312,14 @@ def test_revision_feedback_influences_pitch_writer_prompt() -> None:
 # ---------------------------------------------------------------------------
 
 _TESTS = [
-    ("Revision feedback flows into idea_generator prompt", test_revision_feedback_influences_idea_generator_prompt),
-    ("Revision feedback flows into pitch_writer prompt", test_revision_feedback_influences_pitch_writer_prompt),
+    (
+        "Revision feedback flows into idea_generator prompt",
+        test_revision_feedback_influences_idea_generator_prompt,
+    ),
+    (
+        "Revision feedback flows into pitch_writer prompt",
+        test_revision_feedback_influences_pitch_writer_prompt,
+    ),
 ]
 
 

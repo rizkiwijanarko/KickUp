@@ -21,13 +21,13 @@ Run with:
     python test/test_e2e_full.py
 """
 
-import json
 import os
 import sys
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from dotenv import load_dotenv
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -35,25 +35,24 @@ sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
 # Load environment
-from dotenv import load_dotenv
 load_dotenv(project_root / ".env")
 
-from src.config import settings
-from src.graph import build_graph
-from src.state.schema import (
+from src.config import settings  # noqa: E402
+from src.graph import build_graph  # noqa: E402
+from src.state.schema import (  # noqa: E402
     DataSource,
     PainPoint,
-    PainPointRubric,
     PipelineStage,
     Verdict,
     VentureForgeState,
 )
-from test.test_helpers import make_test_pain_point
+from test.test_helpers import make_test_pain_point  # noqa: E402
 
 
 # =============================================================================
 # FIXTURES
 # =============================================================================
+
 
 @pytest.fixture
 def test_domain() -> str:
@@ -125,28 +124,49 @@ def synthetic_state(test_domain: str, synthetic_pain_points: list[PainPoint]) ->
 # COMPONENT TESTS (Fast, no LangGraph)
 # =============================================================================
 
+
 class TestComponents:
     """Test individual agent components in isolation."""
 
     def test_pain_point_miner(self, initial_state: VentureForgeState):
         """Test Pain Point Miner extracts valid pain points."""
+        from unittest.mock import patch
         from src.agents.pain_point_miner import run as run_pain_point_miner
+        from src.mining import RawEvidence
 
-        result = run_pain_point_miner(initial_state)
-        pain_points = result["pain_points"]
+        sample_evidence = [
+            RawEvidence(
+                text="I spend more time debugging docker-compose.yml than coding my actual backend application.",
+                url="https://news.ycombinator.com/item?id=12345",
+                source=DataSource.HACKERNEWS,
+                title="Docker compose pain",
+                score=100,
+            ),
+            RawEvidence(
+                text="Setting up local environment for Kubernetes microservices takes days for our team.",
+                url="https://news.ycombinator.com/item?id=12346",
+                source=DataSource.HACKERNEWS,
+                title="K8s dev pain",
+                score=90,
+            ),
+        ]
 
-        assert isinstance(pain_points, list), "Should return list of pain points"
-        assert len(pain_points) > 0, "Should extract at least one pain point"
+        with patch("src.agents.pain_point_miner.CompositeDataMiner.mine", return_value=sample_evidence):
+            result = run_pain_point_miner(initial_state)
+            pain_points = result["pain_points"]
 
-        # Validate structure
-        for pp in pain_points:
-            assert isinstance(pp, PainPoint), f"Expected PainPoint, got {type(pp)}"
-            assert pp.source_url, "Pain point must have source URL"
-            assert pp.raw_quote, "Pain point must have verbatim quote"
-            assert pp.rubric, "Pain point must have rubric"
-            assert pp.passes_rubric, "Only passing pain points should be returned"
+            assert isinstance(pain_points, list), "Should return list of pain points"
+            assert len(pain_points) > 0, "Should extract at least one pain point"
 
-        print(f"\n✓ Pain Point Miner extracted {len(pain_points)} valid pain points")
+            # Validate structure
+            for pp in pain_points:
+                assert isinstance(pp, PainPoint), f"Expected PainPoint, got {type(pp)}"
+                assert pp.source_url, "Pain point must have source URL"
+                assert pp.raw_quote, "Pain point must have verbatim quote"
+                assert pp.rubric, "Pain point must have rubric"
+                assert pp.passes_rubric, "Only passing pain points should be returned"
+
+            print(f"\n✓ Pain Point Miner extracted {len(pain_points)} valid pain points")
 
     def test_idea_generator(self, synthetic_state: VentureForgeState):
         """Test Idea Generator creates valid startup ideas."""
@@ -166,7 +186,9 @@ class TestComponents:
             assert idea.problem, "Idea must describe problem"
             assert idea.solution, "Idea must describe solution"
             assert idea.target_user, "Idea must identify target user"
-            assert len(idea.addresses_pain_point_ids) >= 2, "Idea must address at least 2 pain points"
+            assert len(idea.addresses_pain_point_ids) >= 2, (
+                "Idea must address at least 2 pain points"
+            )
 
         print(f"\n✓ Idea Generator created {len(ideas)} valid ideas")
 
@@ -194,19 +216,22 @@ class TestComponents:
             assert si.demand_rubric, "Must have demand rubric"
             assert si.novelty_rubric, "Must have novelty rubric"
             assert 0 <= si.yes_count <= 8, f"yes_count must be 0-8, got {si.yes_count}"
-            assert si.verdict in [Verdict.PURSUE, Verdict.EXPLORE, Verdict.PARK], \
+            assert si.verdict in [Verdict.PURSUE, Verdict.EXPLORE, Verdict.PARK], (
                 f"Invalid verdict: {si.verdict}"
+            )
             assert si.one_risk, "Must identify one key risk"
             assert si.core_assumption, "Must state core assumption"
 
             # Validate verdict logic
             has_fatal = any(f.severity == "fatal" for f in si.fatal_flaws)
             if si.yes_count >= 6 and not has_fatal:
-                assert si.verdict == Verdict.PURSUE, \
+                assert si.verdict == Verdict.PURSUE, (
                     f"6+ yes with no fatal flaws should be PURSUE, got {si.verdict}"
+                )
             elif si.yes_count <= 2 or has_fatal:
-                assert si.verdict == Verdict.PARK, \
+                assert si.verdict == Verdict.PARK, (
                     f"≤2 yes or fatal flaw should be PARK, got {si.verdict}"
+                )
 
         print(f"\n✓ Scorer evaluated {len(scored_ideas)} ideas with binary rubrics")
 
@@ -234,13 +259,14 @@ class TestComponents:
             assert brief.idea_id, "Pitch must reference idea_id"
             assert brief.title, "Pitch must have title"
             assert brief.tagline, "Pitch must have tagline"
-            assert len(brief.tagline.split()) <= 12, \
+            assert len(brief.tagline.split()) <= 12, (
                 f"Tagline should be ≤12 words, got {len(brief.tagline.split())}"
+            )
             assert brief.problem, "Pitch must describe problem"
             assert brief.solution, "Pitch must describe solution"
             assert brief.target_user, "Pitch must identify target user"
             assert brief.market_opportunity, "Pitch must describe market"
-            
+
             # Phase 1-3: New fields
             assert brief.competitive_landscape, "Pitch must have competitive_landscape"
             assert brief.competitive_landscape.current_behavior, "Must describe current behavior"
@@ -248,10 +274,11 @@ class TestComponents:
             assert brief.competitive_landscape.real_enemy, "Must identify habit to break"
             assert brief.differentiation, "Pitch must explain differentiation"
             assert brief.validation_plan, "Pitch must have validation_plan"
-            assert len(brief.validation_plan.discovery_questions) == 5, \
+            assert len(brief.validation_plan.discovery_questions) == 5, (
                 f"Must have exactly 5 discovery questions, got {len(brief.validation_plan.discovery_questions)}"
+            )
             assert brief.validation_plan.validation_criteria, "Must have validation criteria"
-            
+
             assert brief.business_model, "Pitch must describe business model"
             assert brief.go_to_market, "Pitch must describe GTM strategy"
             assert brief.key_risk, "Pitch must identify key risk"
@@ -292,8 +319,9 @@ class TestComponents:
         assert isinstance(critique.rubric.unscalable_acquisition_concrete, bool)
         assert isinstance(critique.rubric.gtm_leads_with_manual_recruitment, bool)
 
-        assert critique.approval_status in ["approved", "revise"], \
+        assert critique.approval_status in ["approved", "revise"], (
             f"Invalid approval status: {critique.approval_status}"
+        )
 
         if not critique.all_pass:
             assert critique.target_agent, "Must specify target agent for revision"
@@ -306,6 +334,7 @@ class TestComponents:
 # =============================================================================
 # INTEGRATION TESTS (LangGraph orchestration)
 # =============================================================================
+
 
 class TestOrchestration:
     """Test full LangGraph orchestration with reflection loop."""
@@ -341,7 +370,7 @@ class TestOrchestration:
                 print(f"  Failing checks: {final_state.critique.failing_checks}")
                 print(f"  Target agent: {final_state.critique.target_agent}")
 
-        print(f"\n✓ Full pipeline completed successfully")
+        print("\n✓ Full pipeline completed successfully")
         print(f"  Pain points: {len(final_state.pain_points)}")
         print(f"  Ideas: {len(final_state.ideas)}")
         print(f"  Scored ideas: {len(final_state.scored_ideas)}")
@@ -364,8 +393,9 @@ class TestOrchestration:
 
         # Validate final state
         assert final_state.pain_points, "Should extract real pain points"
-        assert all(pp.source_url.startswith("http") for pp in final_state.pain_points), \
+        assert all(pp.source_url.startswith("http") for pp in final_state.pain_points), (
             "All pain points must have real URLs"
+        )
         assert final_state.ideas, "Should generate ideas from real pain points"
         assert final_state.scored_ideas, "Should score ideas"
         assert final_state.pitch_briefs, "Should write pitches"
@@ -380,7 +410,7 @@ class TestOrchestration:
             for link in brief.evidence_links:
                 assert link.startswith("http"), f"Invalid evidence link: {link}"
 
-        print(f"\n✓ Full pipeline with real data completed")
+        print("\n✓ Full pipeline with real data completed")
         print(f"  Pain points: {len(final_state.pain_points)}")
         print(f"  Ideas: {len(final_state.ideas)}")
         print(f"  Pitch briefs: {len(final_state.pitch_briefs)}")
@@ -419,7 +449,9 @@ class TestOrchestration:
             assert patch["next_node"] == state.critique.target_agent
 
             # Test reset_for_revision (clears downstream data AND critique)
-            reset_patch = state.reset_for_revision(state.critique.target_agent, state.critique.idea_id)
+            reset_patch = state.reset_for_revision(
+                state.critique.target_agent, state.critique.idea_id
+            )
             assert "critique" in reset_patch, "Should clear critique"
             assert reset_patch["critique"] is None
             assert "current_stage" in reset_patch
@@ -432,15 +464,14 @@ class TestOrchestration:
             elif state.critique.target_agent == "pitch_writer":
                 assert "pitch_briefs" in reset_patch
 
-            print(f"\n✓ Reflection loop logic validated")
+            print("\n✓ Reflection loop logic validated")
             print(f"  Target agent: {state.critique.target_agent}")
             print(f"  Failing checks: {state.critique.failing_checks}")
         else:
-            print(f"\n✓ Critique passed on first attempt (no revision needed)")
+            print("\n✓ Critique passed on first attempt (no revision needed)")
 
     def test_max_revisions_enforced(self, synthetic_state: VentureForgeState):
         """Test that max_revisions cap is enforced."""
-        from src.agents.critic import run as run_critic
 
         # Simulate reaching max revisions
         test_idea_id = str(uuid4())
@@ -454,12 +485,13 @@ class TestOrchestration:
         # Check can_revise property
         assert not state.can_revise, "Should not allow revision at max_revisions"
 
-        print(f"\n✓ Max revisions cap enforced correctly")
+        print("\n✓ Max revisions cap enforced correctly")
 
 
 # =============================================================================
 # SUCCESS CRITERIA VALIDATION
 # =============================================================================
+
 
 class TestSuccessCriteria:
     """Validate all success criteria from orchestration.json."""
@@ -484,8 +516,9 @@ class TestSuccessCriteria:
 
         # ✓ All pain points have real, verifiable source URLs
         for pp in final_state.pain_points:
-            assert pp.source_url.startswith("http"), \
+            assert pp.source_url.startswith("http"), (
                 f"Pain point must have real URL: {pp.source_url}"
+            )
             assert pp.raw_quote, "Pain point must have verbatim quote"
 
         # ✓ Critic reflection loop triggers (or passes on first attempt)
@@ -508,7 +541,7 @@ class TestSuccessCriteria:
         # ✓ State is immutable (agents return patches, not mutations)
         # This is enforced by Pydantic and the agent design pattern
 
-        print(f"\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print("ALL SUCCESS CRITERIA VALIDATED ✓")
         print("=" * 60)
         print(f"Pain points extracted: {len(final_state.pain_points)}")
@@ -537,12 +570,15 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Run pytest programmatically
-    exit_code = pytest.main([
-        __file__,
-        "-v",
-        "-s",
-        "--tb=short",
-        "-m", "not slow",  # Skip slow tests by default
-    ])
+    exit_code = pytest.main(
+        [
+            __file__,
+            "-v",
+            "-s",
+            "--tb=short",
+            "-m",
+            "not slow",  # Skip slow tests by default
+        ]
+    )
 
     sys.exit(exit_code)

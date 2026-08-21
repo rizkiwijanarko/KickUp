@@ -8,8 +8,6 @@ from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
-from src.models.common import TargetAgent
-
 
 class CritiqueRubric(BaseModel):
     """Binary checks applied by the Critic to pitch briefs."""
@@ -53,7 +51,9 @@ class Critique(BaseModel):
             weak_claims = not r.all_claims_evidence_backed
             insufficient_sources = not r.minimum_evidence_sources
             scorer_issue = not r.scorer_verdict_justified
-            positioning_failed = (not r.target_is_contained_fire) or (not r.competition_embraced_with_thesis)
+            positioning_failed = (not r.target_is_contained_fire) or (
+                not r.competition_embraced_with_thesis
+            )
             writing_failed = not r.tagline_under_12_words
             validation_plan_failed = not r.validation_plan_complete
 
@@ -63,7 +63,7 @@ class Critique(BaseModel):
                 self.target_agent = "idea_generator"
             elif insufficient_sources:
                 self.target_agent = "pitch_writer"
-            elif validation_plan_failed:
+            elif validation_plan_failed or writing_failed:
                 self.target_agent = "pitch_writer"
             elif weak_claims and not hallucinated_urls:
                 self.target_agent = "pitch_writer"

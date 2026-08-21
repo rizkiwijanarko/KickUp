@@ -3,10 +3,10 @@ VentureForge Custom Exceptions
 ===============================
 Domain-specific exceptions for better error handling and debugging.
 """
+
 from __future__ import annotations
 
 from typing import Any
-
 
 
 class VentureForgeError(Exception):
@@ -40,9 +40,7 @@ class MaxAttemptsExceededError(PipelineError):
     def __init__(self, operation: str, max_attempts: int):
         self.operation = operation
         self.max_attempts = max_attempts
-        super().__init__(
-            f"{operation} failed after {max_attempts} attempts"
-        )
+        super().__init__(f"{operation} failed after {max_attempts} attempts")
 
 
 # =============================================================================
@@ -62,7 +60,7 @@ class InvalidPainPointError(ValidationError):
     def __init__(self, reason: str, pain_point_id: str | None = None):
         self.reason = reason
         self.pain_point_id = pain_point_id
-        msg = f"Invalid pain point"
+        msg = "Invalid pain point"
         if pain_point_id:
             msg += f" (ID: {pain_point_id})"
         msg += f": {reason}"
@@ -75,7 +73,7 @@ class InvalidIdeaError(ValidationError):
     def __init__(self, reason: str, idea_id: str | None = None):
         self.reason = reason
         self.idea_id = idea_id
-        msg = f"Invalid idea"
+        msg = "Invalid idea"
         if idea_id:
             msg += f" (ID: {idea_id})"
         msg += f": {reason}"
@@ -88,7 +86,7 @@ class InvalidPitchError(ValidationError):
     def __init__(self, reason: str, pitch_id: str | None = None):
         self.reason = reason
         self.pitch_id = pitch_id
-        msg = f"Invalid pitch"
+        msg = "Invalid pitch"
         if pitch_id:
             msg += f" (ID: {pitch_id})"
         msg += f": {reason}"
@@ -101,9 +99,7 @@ class MissingRequiredFieldError(ValidationError):
     def __init__(self, field_name: str, model_name: str):
         self.field_name = field_name
         self.model_name = model_name
-        super().__init__(
-            f"Required field '{field_name}' missing from {model_name}"
-        )
+        super().__init__(f"Required field '{field_name}' missing from {model_name}")
 
 
 # =============================================================================
@@ -122,9 +118,7 @@ class LLMTimeoutError(LLMError):
 
     def __init__(self, timeout_seconds: int):
         self.timeout_seconds = timeout_seconds
-        super().__init__(
-            f"LLM request timed out after {timeout_seconds} seconds"
-        )
+        super().__init__(f"LLM request timed out after {timeout_seconds} seconds")
 
 
 class LLMInvalidResponseError(LLMError):
@@ -133,9 +127,7 @@ class LLMInvalidResponseError(LLMError):
     def __init__(self, expected_format: str, received: str):
         self.expected_format = expected_format
         self.received = received
-        super().__init__(
-            f"Expected {expected_format}, received: {received[:200]}"
-        )
+        super().__init__(f"Expected {expected_format}, received: {received[:200]}")
 
 
 class LLMJSONParseError(LLMError):
@@ -144,10 +136,7 @@ class LLMJSONParseError(LLMError):
     def __init__(self, raw_response: str, parse_error: str):
         self.raw_response = raw_response
         self.parse_error = parse_error
-        super().__init__(
-            f"JSON parse error: {parse_error}. "
-            f"Response: {raw_response[:200]}"
-        )
+        super().__init__(f"JSON parse error: {parse_error}. Response: {raw_response[:200]}")
 
 
 class LLMRateLimitError(LLMError):
@@ -178,9 +167,7 @@ class NoDataFoundError(ScrapingError):
     def __init__(self, source: str, domain: str):
         self.source = source
         self.domain = domain
-        super().__init__(
-            f"No data found from {source} for domain '{domain}'"
-        )
+        super().__init__(f"No data found from {source} for domain '{domain}'")
 
 
 class ScraperAPIError(ScrapingError):
@@ -190,9 +177,7 @@ class ScraperAPIError(ScrapingError):
         self.api_name = api_name
         self.status_code = status_code
         self.message = message
-        super().__init__(
-            f"{api_name} API error (HTTP {status_code}): {message}"
-        )
+        super().__init__(f"{api_name} API error (HTTP {status_code}): {message}")
 
 
 # =============================================================================
@@ -212,8 +197,7 @@ class MissingAPIKeyError(ConfigurationError):
     def __init__(self, key_name: str):
         self.key_name = key_name
         super().__init__(
-            f"Missing required API key: {key_name}. "
-            f"Set it in .env or environment variables."
+            f"Missing required API key: {key_name}. Set it in .env or environment variables."
         )
 
 
@@ -224,10 +208,7 @@ class InvalidConfigurationError(ConfigurationError):
         self.setting_name = setting_name
         self.value = value
         self.reason = reason
-        super().__init__(
-            f"Invalid configuration for '{setting_name}' = {value}: {reason}"
-        )
-
+        super().__init__(f"Invalid configuration for '{setting_name}' = {value}: {reason}")
 
 
 # =============================================================================
@@ -248,9 +229,7 @@ class InvalidStateTransitionError(StateError):
         self.from_stage = from_stage
         self.to_stage = to_stage
         self.reason = reason
-        super().__init__(
-            f"Invalid transition from {from_stage} to {to_stage}: {reason}"
-        )
+        super().__init__(f"Invalid transition from {from_stage} to {to_stage}: {reason}")
 
 
 class StateCorruptionError(StateError):
@@ -259,6 +238,4 @@ class StateCorruptionError(StateError):
     def __init__(self, field_name: str, reason: str):
         self.field_name = field_name
         self.reason = reason
-        super().__init__(
-            f"State corruption detected in '{field_name}': {reason}"
-        )
+        super().__init__(f"State corruption detected in '{field_name}': {reason}")

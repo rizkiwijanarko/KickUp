@@ -6,6 +6,7 @@ blogs, Q&A sites, and community discussions across the web.
 
 Required env: ``TAVILY_API_KEY``
 """
+
 from __future__ import annotations
 
 import logging
@@ -88,7 +89,9 @@ def _clean_content(text: str) -> str:
     # Remove excessive whitespace
     text = re.sub(r"\s+", " ", text).strip()
     # Remove common boilerplate patterns
-    text = re.sub(r"(Sign up|Log in|Subscribe|Cookie|Privacy Policy).*?(\.|$)", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(Sign up|Log in|Subscribe|Cookie|Privacy Policy).*?(\.|$)", "", text, flags=re.IGNORECASE
+    )
     return text.strip()
 
 
@@ -249,5 +252,7 @@ def scrape_for_domain(domain: str, max_total_comments: int = 100) -> list[Scrape
                 if len(all_comments) >= max_total_comments:
                     break
 
-    logger.info(f"[tavily_content] scraped {len(all_comments)} content chunks for domain='{domain}'")
+    logger.info(
+        f"[tavily_content] scraped {len(all_comments)} content chunks for domain='{domain}'"
+    )
     return all_comments

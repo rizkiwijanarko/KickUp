@@ -8,12 +8,10 @@ Run:
 
 Tip: set DOMAIN env var to override the default domain.
 """
+
 from __future__ import annotations
 
-import json
 import os
-import random
-from typing import Any
 
 from src.tools import hackernews_scraper as hns
 
@@ -246,7 +244,7 @@ def test_summarize_sample_comments() -> None:
     min_len = min(lengths)
     max_len = max(lengths)
 
-    print(f"  Sample statistics:")
+    print("  Sample statistics:")
     print(f"    Total comments: {len(comments)}")
     print(f"    Avg length: {avg_len:.1f} chars")
     print(f"    Min length: {min_len} chars")

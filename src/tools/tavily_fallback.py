@@ -7,6 +7,7 @@ that should be scraped by the Reddit JSON scraper.
 
 Required env: ``TAVILY_API_KEY``
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,10 +36,27 @@ _REQUEST_DELAY_S: float = 0.5
 
 # Subreddits we never want to scrape (meta, huge, off-topic)
 _SUBREDDIT_DENYLIST: set[str] = {
-    "all", "popular", "askreddit", "announcements", "blog",
-    "pics", "funny", "memes", "aww", "gifs", "videos", "news",
-    "worldnews", "politics", "science", "IAmA", "bestof",
-    "lifeprotips", "personalfinance", "amitheasshole", "tifu",
+    "all",
+    "popular",
+    "askreddit",
+    "announcements",
+    "blog",
+    "pics",
+    "funny",
+    "memes",
+    "aww",
+    "gifs",
+    "videos",
+    "news",
+    "worldnews",
+    "politics",
+    "science",
+    "IAmA",
+    "bestof",
+    "lifeprotips",
+    "personalfinance",
+    "amitheasshole",
+    "tifu",
     "todayilearned",
 }
 
@@ -141,6 +159,7 @@ def search_communities(domain: str) -> list[str]:
     # Remove denylisted and already-known subreddits
     known = set()
     from src.tools.reddit_scraper import COMMUNITY_MAP
+
     for subs in COMMUNITY_MAP.values():
         known.update(s.lower() for s in subs)
     candidates -= known

@@ -10,8 +10,10 @@ Pipeline flow:
 4. Validate that addresses_pain_point_ids reference real pain points
 5. Return validated Idea objects
 """
+
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import time
@@ -20,7 +22,8 @@ from uuid import UUID, uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.constants import MAX_IDEAS_PER_RUN_DEFAULT, MAX_PAIN_POINTS_FOR_PROMPT
+from src.config import settings
+from src.constants import IDEA_THEME_ANGLES, MAX_IDEAS_PER_RUN_DEFAULT, MAX_PAIN_POINTS_FOR_PROMPT
 from src.exceptions import LLMError, LLMJSONParseError
 from src.llm.client import extract_json, get_llm
 from src.llm.prompts import get_prompt
@@ -177,7 +180,7 @@ def _build_user_prompt(
         f"{revision_block}"
         f"{requirement_block}"
         "Only use UUIDs from the pain points list above — do not invent new UUIDs.\n\n"
-        "Return JSON: {\"ideas\": [ ... ]}."
+        'Return JSON: {"ideas": [ ... ]}.'
     )
 
 
@@ -185,32 +188,15 @@ def _build_user_prompt_single(
     state: VentureForgeState,
     idea_number: int,
     total_ideas: int,
+    theme_angle: str | None = None,
 ) -> str:
-    """
-    Build prompt for generating a SINGLE idea to reduce token usage.
-
-    Generates one idea at a time for:
-    - Better fit within vLLM 2048 token limit
-    - More focused, comprehensive ideas
-    - LLM can concentrate on each idea individually
-
-    Args:
-        state: Current pipeline state
-        idea_number: Which idea this is (1-indexed for display)
-        total_ideas: Total number of ideas to generate
-
-    Returns:
-        Formatted user prompt for single idea
-    """
-    # Sort pain points by evidence count
-    sorted_pps = sorted(
-        state.filtered_pain_points,
-        key=lambda pp: len(pp.evidence),
-        reverse=True,
-    )
-    pps = sorted_pps[:MAX_PAIN_POINTS_FOR_PROMPT]
+    """Build the user prompt for generating a SINGLE idea."""
+    pps = state.filtered_pain_points or state.pain_points
     domain = state.domain
-    feedback = state.revision_feedback or "None"
+    feedback = state.revision_feedback or ""
+
+    # Sort pain points by evidence count (descending) and cap to top N
+    pps = sorted(pps, key=lambda pp: len(pp.evidence), reverse=True)[:MAX_PAIN_POINTS_FOR_PROMPT]
 
     # Serialize pain points with evidence (limit to top 2 evidence items per pain point)
     pp_blobs: List[Dict[str, Any]] = [
@@ -231,15 +217,45 @@ def _build_user_prompt_single(
         for pp in pps
     ]
 
+    # Angle block if provided (initial generation diversity)
+    angle_block = ""
+    if theme_angle and not state.revision_feedback:
+        angle_block = (
+            f"**CREATIVE ANGLE / FOCUS FOR THIS IDEA:**\n"
+            f"Explore solutions aligned with: {theme_angle}\n"
+            f"Ground your concept in this perspective to ensure maximum market differentiation.\n\n"
+        )
+
     # Revision block if applicable
     revision_block = ""
     if state.revision_feedback:
+        prev_idea = (
+            next((i for i in state.ideas if i.id == state.current_revision_idea_id), None)
+            if state.current_revision_idea_id
+            else None
+        )
+        prev_blob = ""
+        if prev_idea:
+            prev_idea_dict = {
+                "title": prev_idea.title,
+                "one_liner": prev_idea.one_liner,
+                "problem": prev_idea.problem,
+                "solution": prev_idea.solution,
+                "target_user": prev_idea.target_user,
+                "key_features": prev_idea.key_features,
+                "addresses_pain_point_ids": [
+                    str(pid) for pid in prev_idea.addresses_pain_point_ids
+                ],
+            }
+            prev_blob = f"\nPREVIOUS IDEA TO REFINE:\n{json.dumps(prev_idea_dict, indent=2)}\n"
+
         revision_block = (
             "THIS IS A REVISION ROUND. The critic flagged weaknesses in positioning. "
             "You MUST address the following feedback:\n"
-            f"- Critic feedback: {feedback}\n\n"
+            f"- Critic feedback: {feedback}\n"
+            f"{prev_blob}\n"
             "Make the target_user a specific, named, reachable community (a 'contained fire') "
-            "and make the competition thesis explicit.\n\n"
+            "and make the competition thesis explicit. Refine the existing concept rather than inventing an unrelated one.\n\n"
         )
 
     # Determine minimum pain point references
@@ -266,10 +282,11 @@ def _build_user_prompt_single(
         f"Generating idea {idea_number} of {total_ideas}\n\n"
         f"PAIN POINTS ({len(pps)} provided):\n"
         f"{json.dumps(pp_blobs, indent=2)}\n\n"
+        f"{angle_block}"
         f"{revision_block}"
         f"{requirement_block}"
         "Only use UUIDs from the pain points list above — do not invent new UUIDs.\n\n"
-        "Return a single JSON object (not an array): {\"title\": ..., \"one_liner\": ..., ...}"
+        'Return a single JSON object (not an array): {"title": ..., "one_liner": ..., ...}'
     )
     return user_text
 
@@ -342,6 +359,7 @@ def invoke_llm_single(
     state: VentureForgeState,
     idea_number: int,
     total_ideas: int,
+    theme_angle: str | None = None,
     retry_count: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -351,6 +369,7 @@ def invoke_llm_single(
         state: Current pipeline state
         idea_number: Which idea this is (1-indexed)
         total_ideas: Total number of ideas to generate
+        theme_angle: Optional theme angle for parallel differentiation
         retry_count: Current retry attempt (0-indexed)
 
     Returns:
@@ -363,7 +382,11 @@ def invoke_llm_single(
 
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=_build_user_prompt_single(state, idea_number, total_ideas)),
+        HumanMessage(
+            content=_build_user_prompt_single(
+                state, idea_number, total_ideas, theme_angle=theme_angle
+            )
+        ),
     ]
 
     start = time.monotonic()
@@ -371,14 +394,18 @@ def invoke_llm_single(
         raw = llm.invoke(messages)
         content = raw.content if hasattr(raw, "content") else str(raw)
     except Exception as e:
-        logger.error(f"[idea_generator] LLM invocation failed for idea {idea_number} (attempt {retry_count + 1}): {e}")
+        logger.error(
+            f"[idea_generator] LLM invocation failed for idea {idea_number} (attempt {retry_count + 1}): {e}"
+        )
         return None
 
     elapsed = time.monotonic() - start
-    logger.info(f"[idea_generator] LLM responded in {elapsed:.1f}s for idea {idea_number} (attempt {retry_count + 1})")
+    logger.info(
+        f"[idea_generator] LLM responded in {elapsed:.1f}s for idea {idea_number} (attempt {retry_count + 1})"
+    )
 
     # Warn if response looks truncated
-    if content and not content.rstrip().endswith('}'):
+    if content and not content.rstrip().endswith("}"):
         logger.warning(
             f"[idea_generator] Response may be truncated for idea {idea_number}. "
             f"Last 100 chars: {content[-100:]}"
@@ -402,6 +429,36 @@ def invoke_llm_single(
     # Handle plain array format (backward compatibility with tests)
     if isinstance(parsed, list) and len(parsed) > 0:
         return parsed[0]
+
+    return None
+
+
+def generate_single_idea_with_retry(
+    state: VentureForgeState,
+    idea_number: int,
+    total_ideas: int,
+    theme_angle: str | None = None,
+    max_retries: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Generate a single idea with retry attempts."""
+    for retry in range(max_retries):
+        raw_idea = invoke_llm_single(
+            state, idea_number, total_ideas, theme_angle=theme_angle, retry_count=retry
+        )
+        if raw_idea:
+            logger.info(
+                f"[idea_generator] Successfully generated idea {idea_number} on attempt {retry + 1}"
+            )
+            return raw_idea
+
+        if retry < max_retries - 1:
+            logger.warning(
+                f"[idea_generator] Attempt {retry + 1}/{max_retries} failed for idea {idea_number}. Retrying..."
+            )
+        else:
+            logger.error(
+                f"[idea_generator] All {max_retries} attempts failed for idea {idea_number}."
+            )
 
     return None
 
@@ -594,51 +651,71 @@ def run(state: VentureForgeState) -> Dict[str, Any]:
     # Determine how many ideas to generate
     if state.current_revision_idea_id:
         count = 1
-        logger.info(f"[idea_generator] Revision mode: generating 1 replacement idea for {state.current_revision_idea_id}")
+        logger.info(
+            f"[idea_generator] Revision mode: generating 1 replacement idea for {state.current_revision_idea_id}"
+        )
     else:
         count = state.ideas_per_run or MAX_IDEAS_PER_RUN_DEFAULT
         logger.info(f"[idea_generator] Initial generation: generating {count} ideas")
 
     MAX_RETRIES = 3
-    raw_ideas = []
+    raw_ideas: list[dict[str, Any]] = []
 
-    # ONE-IDEA-AT-A-TIME GENERATION
-    logger.info(f"[idea_generator] Generating {count} ideas one at a time")
-    for i in range(count):
-        idea_number = i + 1
-        logger.info(f"[idea_generator] Generating idea {idea_number} of {count}")
-
-        raw_idea = None
-        for retry in range(MAX_RETRIES):
-            raw_idea = invoke_llm_single(state, idea_number, count, retry_count=retry)
-
-            if raw_idea:
-                logger.info(f"[idea_generator] Successfully generated idea {idea_number} on attempt {retry + 1}")
-                raw_ideas.append(raw_idea)
-                break
-
-            if retry < MAX_RETRIES - 1:
-                logger.warning(
-                    f"[idea_generator] Attempt {retry + 1}/{MAX_RETRIES} failed for idea {idea_number}. Retrying..."
-                )
-            else:
-                logger.error(
-                    f"[idea_generator] All {MAX_RETRIES} attempts failed for idea {idea_number}."
-                )
+    if state.current_revision_idea_id or count <= 1:
+        logger.info(f"[idea_generator] Generating {count} idea(s) sequentially")
+        raw_idea = generate_single_idea_with_retry(
+            state,
+            1,
+            1,
+            max_retries=MAX_RETRIES,
+        )
+        if raw_idea:
+            raw_ideas.append(raw_idea)
+    else:
+        max_workers = min(count, settings.llm_max_concurrency)
+        logger.info(
+            f"[idea_generator] Dispatching {count} idea generation tasks across {max_workers} concurrent threads"
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_num = {
+                executor.submit(
+                    generate_single_idea_with_retry,
+                    state,
+                    i + 1,
+                    count,
+                    IDEA_THEME_ANGLES[i % len(IDEA_THEME_ANGLES)],
+                    MAX_RETRIES,
+                ): i + 1
+                for i in range(count)
+            }
+            for future in concurrent.futures.as_completed(future_to_num):
+                idea_num = future_to_num[future]
+                try:
+                    raw_idea = future.result()
+                    if raw_idea:
+                        raw_ideas.append(raw_idea)
+                except Exception as exc:
+                    logger.error(
+                        f"[idea_generator] Worker thread failed for idea {idea_num}: {exc}"
+                    )
 
     logger.info(f"[idea_generator] LLM produced {len(raw_ideas)} raw ideas")
 
     # DEBUG: Log first raw idea to diagnose validation failures
     if raw_ideas:
         logger.info(f"[idea_generator] Sample raw idea: {json.dumps(raw_ideas[0], indent=2)}")
-        logger.info(f"[idea_generator] Valid pain point IDs: {[str(vid) for vid in list(valid_ids)[:3]]}")
+        logger.info(
+            f"[idea_generator] Valid pain point IDs: {[str(vid) for vid in list(valid_ids)[:3]]}"
+        )
 
     validated: List[Idea] = []
     for raw in raw_ideas:
         idea = convert_to_idea(raw, valid_ids, min_refs)
         if idea:
             validated.append(idea)
-            logger.debug(f"[idea_generator] Validated idea: {idea.title} with {len(idea.addresses_pain_point_ids)} pain point refs")
+            logger.debug(
+                f"[idea_generator] Validated idea: {idea.title} with {len(idea.addresses_pain_point_ids)} pain point refs"
+            )
         else:
             logger.debug(f"[idea_generator] Rejected idea: {raw.get('title', 'unknown')}")
 

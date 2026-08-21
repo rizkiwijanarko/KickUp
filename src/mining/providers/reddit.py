@@ -5,10 +5,9 @@ Reddit data mining provider using PRAW.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from src.config import settings
-from src.mining.provider import RawEvidence, SourceProvider
+from src.mining.provider import RawEvidence
 from src.models.common import DataSource
 from src.tools.reddit_scraper import scrape_for_domain
 

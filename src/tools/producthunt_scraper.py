@@ -11,12 +11,11 @@ To get an API key:
 2. Create an application and get your OAuth token
 3. Set PRODUCT_HUNT_API_KEY to your bearer token (starts with "phc_...")
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import Any
 
 import diskcache
 import requests
@@ -54,10 +53,22 @@ _SEARCH_QUERIES: list[str] = [
 _DOMAIN_EXPANSIONS: dict[str, list[str]] = {
     "developer tools": ["devtools", "IDE", "CI/CD", "debugging", "testing framework", "API"],
     "healthcare": ["EHR", "patient portal", "medical software", "telehealth", "clinic"],
-    "finance": ["fintech", "banking app", "payment processing", "accounting software", "investment"],
+    "finance": [
+        "fintech",
+        "banking app",
+        "payment processing",
+        "accounting software",
+        "investment",
+    ],
     "education": ["edtech", "LMS", "online learning", "course platform", "teaching"],
     "e-commerce": ["shopify", "online store", "checkout", "inventory management", "selling"],
-    "marketing": ["SEO tool", "analytics", "email marketing", "social media management", "advertising"],
+    "marketing": [
+        "SEO tool",
+        "analytics",
+        "email marketing",
+        "social media management",
+        "advertising",
+    ],
     "ai": ["LLM", "machine learning", "AI tool", "model training", "chatbot"],
     "productivity": ["project management", "task manager", "note-taking", "workflow", "calendar"],
     "design": ["UI design", "UX tool", "design system", "prototyping", "Figma"],
@@ -76,7 +87,9 @@ def _get_domain_keywords(domain: str) -> list[str]:
     return keywords
 
 
-def _make_request(url: str, method: str = "GET", params: dict | None = None, json_data: dict | None = None) -> dict | None:
+def _make_request(
+    url: str, method: str = "GET", params: dict | None = None, json_data: dict | None = None
+) -> dict | None:
     """Make authenticated request to Product Hunt API with caching."""
     # Re-check settings at runtime to support testing with mocked settings
     from src.config import get_settings
@@ -86,7 +99,13 @@ def _make_request(url: str, method: str = "GET", params: dict | None = None, jso
         logger.warning("[producthunt] PRODUCT_HUNT_API_KEY not set")
         return None
 
-    cache_key = ("ph_api", method, url, str(sorted(params.items())) if params else "", str(json_data) if json_data else "")
+    cache_key = (
+        "ph_api",
+        method,
+        url,
+        str(sorted(params.items())) if params else "",
+        str(json_data) if json_data else "",
+    )
     cached = _CACHE.get(cache_key, default=_MISSING)
     if cached is not _MISSING:
         return cached
@@ -261,14 +280,18 @@ def scrape_for_domain(domain: str, max_total_comments: int = 100) -> list[Scrape
 
         # Check if any keyword matches
         matches_domain = any(
-            keyword.lower() in post_name or keyword.lower() in post_tagline or keyword.lower() in post_description
+            keyword.lower() in post_name
+            or keyword.lower() in post_tagline
+            or keyword.lower() in post_description
             for keyword in keywords
         )
 
         if matches_domain:
             matching_posts.append(post)
 
-    logger.info(f"[producthunt] found {len(matching_posts)} matching posts out of {len(posts)} total")
+    logger.info(
+        f"[producthunt] found {len(matching_posts)} matching posts out of {len(posts)} total"
+    )
 
     for post in matching_posts:
         if len(all_comments) >= max_total_comments:

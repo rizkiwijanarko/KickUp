@@ -8,8 +8,6 @@ from typing import Literal
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, model_validator
 
-from src.models.common import Verdict
-
 
 class FeasibilityRubric(BaseModel):
     """Binary checks for feasibility (Scorer)."""
