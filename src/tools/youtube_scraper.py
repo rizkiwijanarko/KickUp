@@ -303,11 +303,13 @@ def scrape_for_domain(domain: str, max_total_comments: int = 200) -> list[Scrape
 
                     # Create ScrapedComment
                     comment_url = f"{video_url}&lc={comment_id}"
+                    like_count = int(comment_data.get("likeCount", 0) or 0)
                     scraped = ScrapedComment(
                         text=comment_text[:800],  # Truncate to keep token count sane
                         url=comment_url,
                         subreddit="youtube",  # Reuse field for source identification
                         post_title=video_title[:120],
+                        score=like_count,
                     )
                     all_comments.append(scraped)
 

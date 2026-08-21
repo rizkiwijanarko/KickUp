@@ -27,7 +27,7 @@
 
 Traditional ideation tools rely on generic LLM brainstorming without grounding. **VentureForge** replaces hallucinations with an evidence-first, multi-agent pipeline:
 
-1. **Multi-Source Evidence Mining**: Concurrently ingests real complaints and discussions from **Hacker News**, **Product Hunt**, **Reddit**, **YouTube Comments**, and **Tavily Search** (with resilient synthetic fallback).
+1. **Multi-Source Evidence Mining**: Concurrently ingests real complaints and discussions from **Hacker News**, **Product Hunt**, **Reddit**, **YouTube Comments**, and **Tavily Search** — grounded live evidence only, no synthetic data. Evidence is engagement-ranked (HN points/comments, Reddit upvotes, YouTube likes, Product Hunt votes) and a per-source cap keeps the LLM window diverse.
 2. **Thematic Clustering**: Clusters verified complaint quotes into distinct market pain points with full provenance and source URLs.
 3. **Targeted Idea Generation**: Synthesizes concrete B2B/B2C startup ideas directly addressing clustered pain points.
 4. **Binary Rubric Scoring**: Evaluates candidate ideas against **8 binary yes/no criteria** inspired by Paul Graham's startup framework (Feasibility + Demand) and filters out fatal flaws (**Pursue-First Filtering**).
@@ -62,7 +62,7 @@ VentureForge uses a **Hierarchical Supervisor Pattern** orchestrated with **Lang
 - **Downstream Invalidation Cascade**: When the Critic flags a defect and routes a revision to an upstream agent (e.g. Pain Point Miner), downstream artifacts are automatically invalidated to prevent stale state contamination.
 - **Quarantine Segregation Policy**: If a pitch brief fails Critic checks after reaching `max_revisions`, it is graduated into a quarantined partition with attached diagnostic cards rather than corrupting approved outputs.
 - **Dual-Tier LLM Architecture**: Configurable fast LLM tier (for mining, idea generation, pitch drafting) and deep reasoning LLM tier (for scoring and adversarial critique).
-- **Resilient Evidence Subsystem**: Concurrent multi-source scraping with timeout budgets and automatic synthetic domain fallbacks for offline or rate-limited environments.
+- **Resilient Evidence Subsystem**: Concurrent multi-source scraping with timeout budgets and graceful degradation — when live sources are unavailable or rate-limited, the run reports the shortfall instead of fabricating evidence.
 - **SQLite Checkpoint Persistence**: LangGraph state transitions persist automatically to `.cache/ventureforge.db` (`SqliteSaver` with `MemorySaver` fallback).
 
 ---

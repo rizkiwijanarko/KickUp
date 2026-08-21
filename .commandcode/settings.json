@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(where.exe:*)",
+      "Shell(python -m pip show token-savior-recall)",
+      "Shell(cmdc:*)",
+      "powershell",
+      "Shell(uv:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

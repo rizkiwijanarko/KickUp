@@ -45,6 +45,8 @@ class ProductHuntProvider:
                         url=c.url,
                         source=DataSource.PRODUCTHUNT,
                         title=c.post_title,
+                        score=int(c.score or 0),
+                        metadata={"votes": c.score},
                     )
                 )
             return results

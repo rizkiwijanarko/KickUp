@@ -1,0 +1,14 @@
+- Prefers verifying package/version lineage and MCP instructions against the upstream repository before changing project agent documentation. Confidence: 0.9
+- Wants `AGENTS.md` kept current when an integrated tool’s package or executable naming changes. Confidence: 0.9
+- Prefers tests to be offline-safe by default, with network- and LLM-dependent tests explicitly identified or isolated before running the full suite. Confidence: 0.9
+- Prefers establishing a clean, untouched test baseline before modifying code, then comparing focused and full validation results against that baseline. Confidence: 0.9
+- Prefers regression tests to exercise real production helpers and state transitions rather than reproducing production logic manually in test code. Confidence: 0.9
+- Prefers verifying reported defects against the current implementation and keeping fixes narrowly scoped, leaving stale or already-covered findings unchanged. Confidence: 0.9
+- Prefers OpenRouter with `deepseek/deepseek-v4-flash-0731` as the default LLM, while keeping OpenAI `gpt-4o-mini` and `gpt-4o` available as switchable alternatives through configuration. Confidence: 0.98
+- Never echoes secrets (API keys/tokens) in commands, logs, or reports; verifies them indirectly (e.g. prefix matching, boolean "set" checks) instead. Confidence: 0.95
+- Runs Python project commands via `uv run python` (the project venv) rather than bare system Python, to keep project dependencies available. Confidence: 0.9
+- When probing why LLM config appears unchanged, compares `.env` against the shell's live environment variables, aware that pydantic-settings prioritizes process environment over `.env`. Confidence: 0.85
+- Prefers applications to fail fast on persistent external-service failures (e.g. repeated LLM auth errors), terminating in a clear FAILED state via a circuit-breaker/attempt-limit rather than silently retrying until hitting a recursion limit. Confidence: 0.8
+- Declines editing the user's shell profile / personal environment config (e.g. removing stale `LLM_*` exports); prefers to work around it via per-command clearing rather than modifying the user's persistent setup unless explicitly asked. Confidence: 0.6
+- When a pipeline output looks like nonsense, wants a root-cause diagnosis that distinguishes data-quality problems (ambiguous queries, noisy sources) from pipeline/infrastructure failures (API rate limits, cached fallback data) rather than accepting or dismissing the output at face value. Confidence: 0.6
+- Wants the pipeline to use only real, grounded evidence — no synthetic/fabricated fallback data at all (not even for demo/resiliency purposes); when live sources are sparse or unavailable, surface the shortfall instead of generating placeholder evidence. Confidence: 0.95

@@ -28,3 +28,11 @@ Prior to this decision:
 - The Pain Point Miner prioritizes high-demand, community-validated frustrations over noise.
 - Obscure domains run seamlessly without stalling or generating hallucinated pain points.
 - Multi-evidence clustering provides richer, better-grounded inputs to downstream idea generators and pitch writers.
+
+## Superseded (2026-08-21): Live-Evidence-Only Policy
+
+Decision 2 (Hybrid Evidence Augmentation) is **reversed**. Synthetic evidence was cached and served back to the pipeline as if it were real, producing fabricated pain points and ideas (e.g. fake `synthetic_*` HN URLs). The pipeline now:
+
+1. Never generates synthetic evidence — sparse or unavailable live data returns an empty corpus and surfaces as a shortfall.
+2. Never caches or serves items marked `metadata.synthetic=True`.
+3. Exposes `--force-refresh` on the CLI to bypass the evidence cache for a run.

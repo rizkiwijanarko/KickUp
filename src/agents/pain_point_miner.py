@@ -4,7 +4,6 @@ Pain Point Miner — extracts structured pain points from grounded source eviden
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
@@ -33,20 +32,44 @@ from src.state.graph_state import VentureForgeState
 
 logger = logging.getLogger(__name__)
 
+# Set by the CLI (--force-refresh) to bypass the evidence cache for a run.
+force_refresh: bool = False
+
+
+# Per-source cap when serializing evidence so one dominant source cannot
+# crowd out the rest (global limit applies on top of per-source caps).
+_EVIDENCE_PER_SOURCE_CAP = 8
+
 
 def _serialize_evidence(evidence: list[RawEvidence], limit: int = 15) -> list[dict[str, Any]]:
-    """Serialize highest-scored evidence items to compact dict format for LLM prompt."""
+    """Serialize highest-scored evidence items to compact dict format for LLM prompt.
+
+    Items are ranked by composite engagement score descending, then a per-source
+    cap is applied so a single high-volume provider cannot dominate the window.
+    """
     sorted_evidence = sorted(evidence, key=lambda x: getattr(x, "score", 0), reverse=True)
-    return [
-        {
-            "text": item.text[:COMMENT_TEXT_MAX_LENGTH],
-            "url": item.url,
-            "source": item.source.value if hasattr(item.source, "value") else str(item.source),
-            "post_title": item.title[:POST_TITLE_MAX_LENGTH] if item.title else "",
-            "score": item.score,
-        }
-        for item in sorted_evidence[:limit]
-    ]
+
+    per_source: dict[str, list[dict[str, Any]]] = {}
+    for item in sorted_evidence:
+        src = item.source.value if hasattr(item.source, "value") else str(item.source)
+        if len(per_source.get(src, [])) >= _EVIDENCE_PER_SOURCE_CAP:
+            continue
+        per_source.setdefault(src, []).append(
+            {
+                "text": item.text[:COMMENT_TEXT_MAX_LENGTH],
+                "url": item.url,
+                "source": src,
+                "post_title": item.title[:POST_TITLE_MAX_LENGTH] if item.title else "",
+                "score": item.score,
+            }
+        )
+
+    # Flatten per-source buckets in score order, then apply the global cap
+    flat: list[dict[str, Any]] = []
+    for bucket in per_source.values():
+        flat.extend(bucket)
+    flat.sort(key=lambda x: x["score"], reverse=True)
+    return flat[:limit]
 
 
 def _build_system_prompt() -> str:
@@ -70,6 +93,7 @@ def _build_user_prompt(
     evidence_block = "\n".join(
         f"[{i+1}] ({item['source'].upper()}) URL: {item['url']}\n"
         f"Context: {item['post_title']}\n"
+        f"Engagement: {item.get('score', 0)}\n"
         f"Comment: \"{item['text']}\"\n"
         for i, item in enumerate(evidence)
     )
@@ -185,6 +209,18 @@ def _verify_quote_against_corpus(quote: str, clean_corpus: list[str]) -> bool:
     return False
 
 
+def _lookup_evidence_score(
+    source_url: str, evidence_corpus: list[RawEvidence] | None
+) -> int:
+    """Look up the engagement score for a source URL from the raw evidence corpus."""
+    if not evidence_corpus:
+        return 0
+    for item in evidence_corpus:
+        if item.url == source_url:
+            return getattr(item, "score", 0) or 0
+    return 0
+
+
 def _convert_to_pain_points(
     raw_items: list[dict[str, Any]],
     evidence_corpus: list[RawEvidence] | None = None,
@@ -228,6 +264,7 @@ def _convert_to_pain_points(
                             source_url=ev.get("source_url", "https://news.ycombinator.com"),
                             raw_quote=raw_quote,
                             source=ev_src_enum,
+                            score=_lookup_evidence_score(ev.get("source_url", ""), evidence_corpus),
                         )
                     )
             else:
@@ -239,6 +276,9 @@ def _convert_to_pain_points(
                                 source_url=item.get("source_url", "https://news.ycombinator.com"),
                                 raw_quote=raw_quote,
                                 source=source_enum,
+                                score=_lookup_evidence_score(
+                                    item.get("source_url", ""), evidence_corpus
+                                ),
                             )
                         )
                 else:
@@ -247,6 +287,9 @@ def _convert_to_pain_points(
                             source_url=item.get("source_url", "https://news.ycombinator.com"),
                             raw_quote=raw_quote,
                             source=source_enum,
+                            score=_lookup_evidence_score(
+                                item.get("source_url", ""), evidence_corpus
+                            ),
                         )
                     )
 
@@ -313,12 +356,14 @@ def mine_pain_points(
     max_pain_points: int = MAX_PAIN_POINTS_DEFAULT,
     miner: CompositeDataMiner | None = None,
     revision_feedback: str | None = None,
+    force_refresh: bool | None = None,
 ) -> list[PainPoint]:
     """
     Pure domain function: Ingests evidence via DataMiner and extracts PainPoints with LLM.
     """
     data_miner = miner or CompositeDataMiner()
-    evidence = data_miner.mine(domain, limit_per_source=50)
+    refresh = force_refresh if force_refresh is not None else globals()["force_refresh"]
+    evidence = data_miner.mine(domain, limit_per_source=50, force_refresh=refresh)
 
     if not evidence:
         logger.warning(f"[pain_point_miner] No evidence found for domain: {domain}")

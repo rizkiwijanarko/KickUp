@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "token-savior": {
+      "transport": "stdio",
+      "enabled": true,
+      "command": "token-savior",
+      "env": {
+        "WORKSPACE_ROOTS": "D:\\Project\\KickUp",
+        "TOKEN_SAVIOR_CLIENT": "command-code",
+        "TOKEN_SAVIOR_PROFILE": "optimized"
+      }
+    }
+  }
+}

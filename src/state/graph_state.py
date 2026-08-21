@@ -79,10 +79,25 @@ class RevisionLedger:
 
     @property
     def all_critiques(self) -> list[Critique]:
-        """Historical critiques plus the current one."""
-        combined = list(self._critiques)
+        """Return the latest critique for each idea in stable order."""
+        positions: dict[UUID, int] = {}
+        combined: list[Critique] = []
+
+        for critique in self._critiques:
+            if critique.idea_id in positions:
+                combined[positions[critique.idea_id]] = critique
+            else:
+                positions[critique.idea_id] = len(combined)
+                combined.append(critique)
+
         if self._critique is not None:
-            combined.append(self._critique)
+            idea_id = self._critique.idea_id
+            if idea_id in positions:
+                combined[positions[idea_id]] = self._critique
+            else:
+                positions[idea_id] = len(combined)
+                combined.append(self._critique)
+
         return combined
 
     @property
@@ -347,7 +362,6 @@ class VentureForgeState(BaseModel):
     def bump_revision(self, critique: Critique) -> dict[str, Any]:
         """Return a state patch recording a revision."""
         patch: dict[str, Any] = {
-            "critiques": self.critiques + [critique],
             "revision_feedback": critique.revision_feedback,
             "previous_stage": self.current_stage,
             "current_stage": PipelineStage.REVISING,

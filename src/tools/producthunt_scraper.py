@@ -190,6 +190,7 @@ def _get_post_comments(post_id: str, limit: int = 20) -> list[dict]:
               id
               body
               createdAt
+              votesCount
               user {
                 name
                 username
@@ -241,11 +242,13 @@ def _comment_to_scraped(comment: dict, post_name: str, post_url: str) -> Scraped
     comment_id = comment.get("id", "")
     url = f"{post_url}?comment={comment_id}"
 
+    votes = int(comment.get("votesCount", 0) or 0)
     return ScrapedComment(
         text=body,
         url=url,
         subreddit="producthunt",
         post_title=post_name,
+        score=votes,
     )
 
 

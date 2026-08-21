@@ -1,0 +1,508 @@
+{
+  "domain": "ADHD",
+  "max_pain_points": 5,
+  "ideas_per_run": 2,
+  "top_n_pitches": 3,
+  "max_revisions": 1,
+  "pain_points": [
+    {
+      "id": "02101837-39b3-441e-8a14-9bf014b34e2a",
+      "title": "Hyperfocus on side projects derails real work",
+      "description": "ADHD can cause intense hyperfocus on side projects, leading to neglect of primary responsibilities and significant time loss.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48673701",
+          "raw_quote": "Then my ADHD kicked in and I lost focus of my real work for three weeks building and tweaking this tool",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "dd3140b5-b413-41f8-b6ad-55ffc38db374",
+      "title": "Difficulty organizing constant stream of thoughts",
+      "description": "People with ADHD struggle with an overwhelming number of thoughts and ideas, making it hard to organize and prioritize.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48021314",
+          "raw_quote": "For me, one of the biggest problems is that there are too many things in my head, and it is hard to organize them.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "ce67eaf2-ce82-4f79-9fc0-b89ec2d004c7",
+      "title": "ADHD coping tricks stop working over time",
+      "description": "Workarounds for ADHD often lose effectiveness after a short period, leading to frustration and a sense of self-defeat.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48001889",
+          "raw_quote": "The self-defeating nature of ADHD might be one of the most frustrating things.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "f0189104-c7a4-4616-9bff-0786a5faebc6",
+      "title": "Feeling isolated when ahead of neurotypical peers",
+      "description": "ADHD individuals often see patterns and solutions ahead of others, but when they share them, they face resistance and feel forced to stay silent, leading to isolation.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=47014386",
+          "raw_quote": "So really the best solution is to just shut up. Let them catch up eventually. It just feels so isolating and frustrating.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "4f67a260-e105-41a2-84b8-3378bf90eb36",
+      "title": "Ableism and dismissal of ADHD struggles",
+      "description": "People with ADHD face dismissive comments like 'just try focusing' that trivialize their condition and reflect institutional ableism.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=46814412",
+          "raw_quote": "I have ADHD, it's a common trope/meme at this point of Have you just tried focusing? Gee thanks, I'm cured!",
+          "source": "hackernews"
+        }
+      ]
+    }
+  ],
+  "ideas": [
+    {
+      "id": "51f278a0-7386-4b4d-9331-3f4c316ebc17",
+      "title": "FlowFence Rabbit-Hole Guard",
+      "one_liner": "Interrupts side-project hyperfocus before it eats your workday.",
+      "problem": "ADHD developers can lose weeks at a time when hyperfocus locks onto a side project, while the constant stream of other thoughts makes it hard to notice the drift. When a coping trick like timeboxing stops working, the resulting self-defeat makes it even harder to return to real work. Generic planners fail because they ask the user to manually log and switch\u2014exactly what hyperfocus prevents.",
+      "solution": "FlowFence watches IDE/editor activity and detects when you've diverged from your work repo into side-project code for more than a configurable threshold. It then triggers a low-friction interrupt: a 60-second reset ritual, a nudge to a peer accountability partner, and an auto-generated 'where did my time go' summary. Unlike Tiimo or Sunsama, it doesn't depend on manual planning; it meets the user at the moment hyperfocus begins.",
+      "target_user": "Members of r/ADHD_Programmers and the ADHD in Tech Slack workspace who maintain side projects while holding down full-time engineering jobs.",
+      "key_features": [
+        "Repo-aware activity monitor that flags side-project branches and PRs during work hours",
+        "One-click 'rabbit hole' alert that sends a pre-written message to your chosen accountability buddy",
+        "Rotating micro-interruptions (breathing, physical reset, context-switch checklist) that change weekly to avoid coping-trick staleness",
+        "Automatic weekly 'hyperfocus audit' showing time lost to side projects vs. shipped work, with gentle trend alerts",
+        "Slack/Calendar integration that schedules side-project time after core hours and blocks it during focus blocks"
+      ],
+      "addresses_pain_point_ids": [
+        "02101837-39b3-441e-8a14-9bf014b34e2a",
+        "dd3140b5-b413-41f8-b6ad-55ffc38db374",
+        "ce67eaf2-ce82-4f79-9fc0-b89ec2d004c7"
+      ]
+    }
+  ],
+  "scored_ideas": [
+    {
+      "idea_id": "51f278a0-7386-4b4d-9331-3f4c316ebc17",
+      "reasoning_trace": "The manual version is a founder acting as a peer accountability partner who checks in on the developer's IDE activity. Demand is a deep well: ADHD developers lose weeks to hyperfocus on side projects, and existing planners fail because they require manual logging. The schlep is building IDE plugins and handling privacy concerns, which is unsexy but valuable. Early adopters are members of r/ADHD_Programmers and the ADHD in Tech Slack workspace.",
+      "feasibility_rubric": {
+        "can_be_solved_manually_first": true,
+        "has_schlep_or_unsexy_advantage": true,
+        "can_2_3_person_team_build_mvp_in_6_months": true
+      },
+      "demand_rubric": {
+        "addresses_at_least_2_pain_points": true,
+        "is_painkiller_not_vitamin": true,
+        "has_clear_vein_of_early_adopters": true
+      },
+      "novelty_rubric": {
+        "differentiated_from_current_behavior": true,
+        "has_path_out_of_niche": true
+      },
+      "core_assumption": "Developers will allow a low-risk IDE monitoring tool and will accept the interrupt when it detects divergence.",
+      "fatal_flaws": [
+        {
+          "flaw": "Privacy concerns about IDE monitoring may deter users.",
+          "severity": "major"
+        },
+        {
+          "flaw": "The interrupt may be disabled or ignored by users.",
+          "severity": "minor"
+        }
+      ],
+      "yes_count": 8,
+      "total_checks": 8,
+      "verdict": "pursue",
+      "one_risk": "Users may disable the tool due to privacy concerns or annoyance.",
+      "rank": 2
+    }
+  ],
+  "pitch_briefs": [
+    {
+      "idea_id": "51f278a0-7386-4b4d-9331-3f4c316ebc17",
+      "title": "FlowFence Rabbit-Hole Guard",
+      "tagline": "Interrupts side-project hyperfocus before it eats your workday.",
+      "problem": "ADHD developers often lose weeks at a time when hyperfocus locks onto a side project, while the constant stream of other thoughts makes it hard to notice the drift. When a coping trick like timeboxing stops working, the resulting self-defeat makes it even harder to return to real work. Generic planners fail because they ask the user to manually log and switch\u2014exactly what hyperfocus prevents.",
+      "solution": "FlowFence watches IDE/editor activity and detects when you've diverged from your work repo into side-project code for more than a configurable threshold. It then triggers a low-friction interrupt: a 60-second reset ritual, a nudge to a peer accountability partner, and an auto-generated 'where did my time go' summary. Unlike Tiimo or Sunsama, it doesn't depend on manual planning; it meets the user at the moment hyperfocus begins.",
+      "target_user": "Members of r/ADHD_Programmers and the ADHD in Tech Slack workspace who maintain side projects while holding down full-time engineering jobs.",
+      "market_opportunity": "The widespread experience of ADHD developers losing time to hyperfocus, as voiced in community discussions, indicates a substantial market for a tool that addresses this specific failure mode. While exact market size data is not yet cited, the prevalence of the problem among developers with ADHD suggests a viable niche that can expand to broader neurodivergent professional tools.",
+      "competitive_landscape": {
+        "current_behavior": "Ad-hoc timeboxing, manual planning with generic planners like Tiimo or Sunsama, and venting on forums when coping tricks fail.",
+        "direct_competitors": "Tiimo, Sunsama",
+        "real_enemy": "The belief that manual planning and willpower alone can overcome hyperfocus, when the evidence shows that hyperfocus makes manual logging impossible."
+      },
+      "differentiation": "FlowFence detects divergence automatically from IDE activity, bypassing the manual logging that generic planners require. It intervenes at the moment of hyperfocus with a low-friction interrupt, rather than relying on the user to remember to switch tasks.",
+      "validation_plan": {
+        "discovery_questions": [
+          "What exactly happens in your mind when you realize you've spent hours on a side project instead of work?",
+          "How do you currently try to prevent or recover from hyperfocus on side projects?",
+          "What tools have you tried in the past to manage your focus, and why did they stop working?",
+          "How does the self-defeating feeling after a lost day affect your ability to return to work?",
+          "What would make an automatic interrupt feel helpful rather than intrusive or annoying?"
+        ],
+        "validation_criteria": "At least 8 out of 10 interviewees report that they have lost significant time to side-project hyperfocus, have tried generic planners and abandoned them, and express willingness to try a tool that automatically detects divergence."
+      },
+      "business_model": "$15/month per user or $120/year team subscriptions.",
+      "go_to_market": "Direct outreach and live demonstrations within r/ADHD_Programmers and neurodiversity ERGs at tech companies, offering a free 30-day trial to early adopters.",
+      "key_risk": "Users may disable the tool due to privacy concerns about IDE monitoring or annoyance from interrupts.",
+      "next_steps": "Interview 15 engineers from r/ADHD_Programmers; build a 50-line Python CLI prototype that monitors git branch changes; measure 7-day retention of the interrupt feature.",
+      "evidence_links": [
+        "https://news.ycombinator.com/item?id=48673701",
+        "https://news.ycombinator.com/item?id=48021314",
+        "https://news.ycombinator.com/item?id=48001889"
+      ],
+      "markdown_content": "# FlowFence Rabbit-Hole Guard  > **Tagline:** Interrupts side-project hyperfocus before it eats your workday.  ## Problem  ADHD developers often lose weeks at a time when hyperfocus locks onto a side project, while the constant stream of other thoughts makes it hard to notice the drift. One developer shared, *'Then my ADHD kicked in and I lost focus of my real work for three weeks building and tweaking this tool'* [1]. The overwhelming number of thoughts compounds the issue: *'For me, one of the biggest problems is that there are too many things in my head, and it is hard to organize them'* [2]. When a coping trick like timeboxing stops working, the resulting self-defeat\u2014*'The self-defeating nature of ADHD might be one of the most frustrating things'* [3]\u2014makes it even harder to return to real work. Generic planners fail because they ask the user to manually log and switch\u2014exactly what hyperfocus prevents.  ## Solution  FlowFence watches IDE/editor activity and detects when you've diverged from your work repo into side-project code for more than a configurable threshold. It then triggers a low-friction interrupt: a 60-second reset ritual, a nudge to a peer accountability partner, and an auto-generated 'where did my time go' summary. Unlike Tiimo or Sunsama, it doesn't depend on manual planning; it meets the user at the moment hyperfocus begins.  ## Target User  Members of r/ADHD_Programmers and the ADHD in Tech Slack workspace who maintain side projects while holding down full-time engineering jobs.  ## Market Opportunity  The widespread experience of ADHD developers losing time to hyperfocus, as voiced in community discussions [1][2][3], indicates a substantial market for a tool that addresses this specific failure mode. While exact market size data is not yet cited, the prevalence of the problem among developers with ADHD suggests a viable niche that can expand to broader neurodivergent professional tools.  ## Competitive Landscape  - **Current behavior:** Ad-hoc timeboxing, manual planning with generic planners like Tiimo or Sunsama, and venting on forums when coping tricks fail.  - **Direct competitors:** Tiimo, Sunsama  - **Real enemy:** The belief that manual planning and willpower alone can overcome hyperfocus, when the evidence shows that hyperfocus makes manual logging impossible [1][2].  ## Differentiation  FlowFence detects divergence automatically from IDE activity, bypassing the manual logging that generic planners require. It intervenes at the moment of hyperfocus with a low-friction interrupt, rather than relying on the user to remember to switch tasks.  ## Validation Plan  **Discovery Questions:**  1. What exactly happens in your mind when you realize you've spent hours on a side project instead of work?  2. How do you currently try to prevent or recover from hyperfocus on side projects?  3. What tools have you tried in the past to manage your focus, and why did they stop working?  4. How does the self-defeating feeling after a lost day affect your ability to return to work?  5. What would make an automatic interrupt feel helpful rather than intrusive or annoying?  **Validation Criteria:** At least 8 out of 10 interviewees report that they have lost significant time to side-project hyperfocus, have tried generic planners and abandoned them, and express willingness to try a tool that automatically detects divergence.  ## Business Model  $15/month per user or $120/year team subscriptions.  ## Go-to-Market  Direct outreach and live demonstrations within r/ADHD_Programmers and neurodiversity ERGs at tech companies, offering a free 30-day trial to early adopters.  ## Key Risk  Users may disable the tool due to privacy concerns about IDE monitoring or annoyance from interrupts.  ## Next Steps  1. Interview 15 engineers from r/ADHD_Programmers.  2. Build a 50-line Python CLI prototype that monitors git branch changes.  3. Measure 7-day retention of the interrupt feature.  ## Evidence  [1] https://news.ycombinator.com/item?id=48673701  [2] https://news.ycombinator.com/item?id=48021314  [3] https://news.ycombinator.com/item?id=48001889",
+      "revision_count": 0
+    }
+  ],
+  "critiques": [
+    {
+      "idea_id": "10c87b62-bdd4-46e1-9c02-9d1b0efdd467",
+      "reasoning_trace": "The tagline is 7 words: 'Side-project quarantine and thought-capture for ADHD developers.' The pitch cites 2 evidence URLs: https://news.ycombinator.com/item?id=48673701 and https://news.ycombinator.com/item?id=48021314. Both URLs appear in the pain_points evidence arrays (pain point 02101837-39b3-441e-8a14-9bf014b34e2a and dd3140b5-b413-41f8-b6ad-55ffc38db374), so no hallucinated URLs. The validation plan has exactly 5 open-ended discovery questions, all specific to the hyperfocus and thought-capture problem. The target user is a named community \u2014 r/ADHD_Programmers \u2014 so a founder could likely identify 50 members by name this week, making it a contained fire. However, the competitive analysis names current behavior and competitors but lacks a structural thesis on why Tiimo/Sunsama won't or can't address this; 'generic planners miss' is a vague differentiation, not an incumbent constraint. The market claims '$4.5B neuroinclusive workplace tools market' and '120k remote ADHD developers' have no source URL in evidence_links or pain_points, so all_claims_evidence_backed fails. The Scorer's 'pursue' verdict is not fully justified because the pitch has unsourced market claims and weak competitive positioning, even though the core assumption and key_risk align.",
+      "rubric": {
+        "all_claims_evidence_backed": false,
+        "no_hallucinated_source_urls": true,
+        "tagline_under_12_words": true,
+        "target_is_contained_fire": true,
+        "competition_embraced_with_thesis": false,
+        "minimum_evidence_sources": true,
+        "scorer_verdict_justified": false,
+        "validation_plan_complete": true
+      },
+      "all_pass": false,
+      "approval_status": "revise",
+      "failing_checks": [
+        "all_claims_evidence_backed",
+        "competition_embraced_with_thesis",
+        "scorer_verdict_justified"
+      ],
+      "target_agent": "idea_generator",
+      "revision_feedback": "The pain_points array has only 2 pain points and lacks evidence for the market claims '$4.5B neuroinclusive workplace tools market' and '120k remote ADHD developers', as well as the claim 'Existing coping tricks become stale'. Mine additional pain points focusing on the cost of failed coping mechanisms, willingness to pay for ADHD productivity tools, and the scale of the ADHD developer population. Also gather evidence on why generic planners (Tiimo, Sunsama) fail for this specific hyperfocus failure mode, so the competitive thesis can be grounded. This addresses all_claims_evidence_backed; the remaining failing checks (competition_embraced_with_thesis, scorer_verdict_justified) will be handled in a subsequent revision."
+    },
+    {
+      "idea_id": "6d8d8083-ca84-4350-b112-af725e31f3c2",
+      "reasoning_trace": "The tagline is 12 words: 'Adaptive workflow automation for ADHD teams to tame hyperfocus and thought chaos.' The pitch cites 3 evidence URLs: https://news.ycombinator.com/item?id=48673701, https://news.ycombinator.com/item?id=48021314, and https://news.ycombinator.com/item?id=48001889. Cross-referencing these against the pain_points evidence arrays, all 3 URLs appear exactly once across the three pain points, so there are no mismatches. The validation plan has exactly 5 open-ended discovery questions, each specific to the ADHD workflow problem. The target user is a broad demographic \u2014 'Engineering managers and team leads at remote-first startups with ADHD software engineers and creative professionals' \u2014 not a named, reachable community where a founder could identify 50 people by name this week. The competitive landscape names current behavior and direct competitors, but the differentiation is only 'purpose-built for ADHD cognitive patterns,' which is a 'we are better' claim rather than a thesis on what incumbents are afraid to do. The key_risk reflects the Scorer's two minor fatal flaws (B2B sales cycle and gimmicky rotation) but not the Scorer's one_risk about novelty wear-off. The Scorer said 'pursue' with 8/8, but the pitch has significant positioning weaknesses, so that verdict is not fully justified.",
+      "rubric": {
+        "all_claims_evidence_backed": true,
+        "no_hallucinated_source_urls": true,
+        "tagline_under_12_words": true,
+        "target_is_contained_fire": false,
+        "competition_embraced_with_thesis": false,
+        "minimum_evidence_sources": true,
+        "scorer_verdict_justified": false,
+        "validation_plan_complete": true
+      },
+      "all_pass": false,
+      "approval_status": "revise",
+      "failing_checks": [
+        "target_is_contained_fire",
+        "competition_embraced_with_thesis",
+        "scorer_verdict_justified"
+      ],
+      "target_agent": "idea_generator",
+      "revision_feedback": "The pitch fails target_is_contained_fire because target_user is 'Engineering managers and team leads at remote-first startups with ADHD software engineers and creative professionals' \u2014 a demographic, not a contained community. Redefine the target as a specific reachable group the founders can recruit personally, e.g., 'engineering managers in the r/ADHD_Programmers Discord who run remote teams at startups under 50 people' \u2014 the founder should be able to name 50 of them this week. It also fails competition_embraced_with_thesis because differentiation only says 'Unlike generic automation tools, FlowForge is purpose-built for ADHD cognitive patterns' \u2014 that is a 'we are better' claim, not a thesis on what incumbents lack the courage to do. Add a specific thesis, e.g., 'Sunsama and Tiimo sell individual productivity subscriptions and won't build team-level Slack/Jira/GitHub workflow automation because it requires a sales-led motion and integrations that cannibalize their self-serve model; Zapier won't go vertical because horizontal automation is their moat.' Finally, scorer_verdict_justified is false because the Scorer's 'pursue' conflicts with these positioning flaws; after fixing the above, the pitch should support 'pursue.'"
+    }
+  ],
+  "revision_counts": {
+    "10c87b62-bdd4-46e1-9c02-9d1b0efdd467": 1,
+    "6d8d8083-ca84-4350-b112-af725e31f3c2": 1
+  },
+  "revision_feedback": "The pitch fails target_is_contained_fire because target_user is 'Engineering managers and team leads at remote-first startups with ADHD software engineers and creative professionals' \u2014 a demographic, not a contained community. Redefine the target as a specific reachable group the founders can recruit personally, e.g., 'engineering managers in the r/ADHD_Programmers Discord who run remote teams at startups under 50 people' \u2014 the founder should be able to name 50 of them this week. It also fails competition_embraced_with_thesis because differentiation only says 'Unlike generic automation tools, FlowForge is purpose-built for ADHD cognitive patterns' \u2014 that is a 'we are better' claim, not a thesis on what incumbents lack the courage to do. Add a specific thesis, e.g., 'Sunsama and Tiimo sell individual productivity subscriptions and won't build team-level Slack/Jira/GitHub workflow automation because it requires a sales-led motion and integrations that cannibalize their self-serve model; Zapier won't go vertical because horizontal automation is their moat.' Finally, scorer_verdict_justified is false because the Scorer's 'pursue' conflicts with these positioning flaws; after fixing the above, the pitch should support 'pursue.'",
+  "current_revision_idea_id": "6d8d8083-ca84-4350-b112-af725e31f3c2",
+  "current_critique_index": 0,
+  "pain_point_miner_revision_count": 0,
+  "idea_generation_attempts": 2,
+  "pitch_writer_attempts": 2,
+  "scorer_attempts": 2,
+  "max_idea_generation_attempts": 10,
+  "max_total_llm_calls_per_agent": 15,
+  "next_node": "idea_generator",
+  "current_stage": "revising",
+  "previous_stage": "critiquing",
+  "run_id": "a0eb48fb",
+  "started_at": "2026-08-21T15:43:41.608302Z",
+  "error_log": [],
+  "agent_timings": {
+    "pain_point_miner": 91.56199999999808,
+    "idea_generator": 18.57800000000134,
+    "scorer": 18.54699999999866,
+    "pitch_writer": 217.31200000000172,
+    "critic": 47.23500000000058
+  },
+  "events": [
+    {
+      "timestamp": "2026-08-21T15:44:19.456056Z",
+      "agent": "pain_point_miner",
+      "stage": "mining",
+      "kind": "info",
+      "message": "Extracted 0 validated pain points for domain 'ADHD'."
+    },
+    {
+      "timestamp": "2026-08-21T15:44:42.660341Z",
+      "agent": "pain_point_miner",
+      "stage": "mining",
+      "kind": "info",
+      "message": "Extracted 0 validated pain points for domain 'ADHD'."
+    },
+    {
+      "timestamp": "2026-08-21T15:46:14.222303Z",
+      "agent": "pain_point_miner",
+      "stage": "mining",
+      "kind": "info",
+      "message": "Extracted 5 validated pain points for domain 'ADHD'."
+    },
+    {
+      "timestamp": "2026-08-21T15:47:02.959503Z",
+      "agent": "idea_generator",
+      "stage": "generating",
+      "kind": "info",
+      "message": "Generated 2 ideas (requested 2) addressing >=2 validated pain points each."
+    },
+    {
+      "timestamp": "2026-08-21T15:47:30.080154Z",
+      "agent": "scorer",
+      "stage": "scoring",
+      "kind": "info",
+      "message": "Scored 2 ideas \u2192 2 pursue / 0 explore / 0 park."
+    },
+    {
+      "timestamp": "2026-08-21T15:49:32.710201Z",
+      "agent": "pitch_writer",
+      "stage": "writing",
+      "kind": "info",
+      "message": "Generated 2 pitch briefs (0 failed)"
+    },
+    {
+      "timestamp": "2026-08-21T15:50:17.461205Z",
+      "agent": "critic",
+      "stage": "critiquing",
+      "kind": "info",
+      "message": "Critique for idea 10c87b62-bdd4-46e1-9c02-9d1b0efdd467: 3 checks failed. Routing to idea_generator for revision.",
+      "idea_id": "10c87b62-bdd4-46e1-9c02-9d1b0efdd467"
+    },
+    {
+      "timestamp": "2026-08-21T15:50:17.462717Z",
+      "agent": "orchestrator",
+      "stage": "revising",
+      "kind": "warning",
+      "message": "Critique flagged issues. Routing revision to idea_generator: The pain_points array has only 2 pain points and lacks evidence for the market claims '$4.5B neuroinclusive workplace tools market' and '120k remote ADHD developers', as well as the claim 'Existing coping tricks become stale'. Mine additional pain points focusing on the cost of failed coping mechanisms, willingness to pay for ADHD productivity tools, and the scale of the ADHD developer population. Also gather evidence on why generic planners (Tiimo, Sunsama) fail for this specific hyperfocus failure mode, so the competitive thesis can be grounded. This addresses all_claims_evidence_backed; the remaining failing checks (competition_embraced_with_thesis, scorer_verdict_justified) will be handled in a subsequent revision.",
+      "idea_id": "10c87b62-bdd4-46e1-9c02-9d1b0efdd467"
+    },
+    {
+      "timestamp": "2026-08-21T15:50:36.043148Z",
+      "agent": "idea_generator",
+      "stage": "generating",
+      "kind": "info",
+      "message": "Generated 1 ideas (requested 1) addressing >=2 validated pain points each."
+    },
+    {
+      "timestamp": "2026-08-21T15:50:54.582091Z",
+      "agent": "scorer",
+      "stage": "scoring",
+      "kind": "info",
+      "message": "Scored 2 ideas \u2192 2 pursue / 0 explore / 0 park."
+    },
+    {
+      "timestamp": "2026-08-21T15:54:31.900231Z",
+      "agent": "pitch_writer",
+      "stage": "writing",
+      "kind": "info",
+      "message": "Generated 2 pitch briefs (0 failed)"
+    },
+    {
+      "timestamp": "2026-08-21T15:55:19.141428Z",
+      "agent": "critic",
+      "stage": "critiquing",
+      "kind": "info",
+      "message": "Critique for idea 6d8d8083-ca84-4350-b112-af725e31f3c2: 3 checks failed. Routing to idea_generator for revision.",
+      "idea_id": "6d8d8083-ca84-4350-b112-af725e31f3c2"
+    },
+    {
+      "timestamp": "2026-08-21T15:55:19.145434Z",
+      "agent": "orchestrator",
+      "stage": "revising",
+      "kind": "warning",
+      "message": "Critique flagged issues. Routing revision to idea_generator: The pitch fails target_is_contained_fire because target_user is 'Engineering managers and team leads at remote-first startups with ADHD software engineers and creative professionals' \u2014 a demographic, not a contained community. Redefine the target as a specific reachable group the founders can recruit personally, e.g., 'engineering managers in the r/ADHD_Programmers Discord who run remote teams at startups under 50 people' \u2014 the founder should be able to name 50 of them this week. It also fails competition_embraced_with_thesis because differentiation only says 'Unlike generic automation tools, FlowForge is purpose-built for ADHD cognitive patterns' \u2014 that is a 'we are better' claim, not a thesis on what incumbents lack the courage to do. Add a specific thesis, e.g., 'Sunsama and Tiimo sell individual productivity subscriptions and won't build team-level Slack/Jira/GitHub workflow automation because it requires a sales-led motion and integrations that cannibalize their self-serve model; Zapier won't go vertical because horizontal automation is their moat.' Finally, scorer_verdict_justified is false because the Scorer's 'pursue' conflicts with these positioning flaws; after fixing the above, the pitch should support 'pursue.'",
+      "idea_id": "6d8d8083-ca84-4350-b112-af725e31f3c2"
+    }
+  ],
+  "filtered_pain_points": [
+    {
+      "id": "02101837-39b3-441e-8a14-9bf014b34e2a",
+      "title": "Hyperfocus on side projects derails real work",
+      "description": "ADHD can cause intense hyperfocus on side projects, leading to neglect of primary responsibilities and significant time loss.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48673701",
+          "raw_quote": "Then my ADHD kicked in and I lost focus of my real work for three weeks building and tweaking this tool",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "dd3140b5-b413-41f8-b6ad-55ffc38db374",
+      "title": "Difficulty organizing constant stream of thoughts",
+      "description": "People with ADHD struggle with an overwhelming number of thoughts and ideas, making it hard to organize and prioritize.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48021314",
+          "raw_quote": "For me, one of the biggest problems is that there are too many things in my head, and it is hard to organize them.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "ce67eaf2-ce82-4f79-9fc0-b89ec2d004c7",
+      "title": "ADHD coping tricks stop working over time",
+      "description": "Workarounds for ADHD often lose effectiveness after a short period, leading to frustration and a sense of self-defeat.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=48001889",
+          "raw_quote": "The self-defeating nature of ADHD might be one of the most frustrating things.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "f0189104-c7a4-4616-9bff-0786a5faebc6",
+      "title": "Feeling isolated when ahead of neurotypical peers",
+      "description": "ADHD individuals often see patterns and solutions ahead of others, but when they share them, they face resistance and feel forced to stay silent, leading to isolation.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=47014386",
+          "raw_quote": "So really the best solution is to just shut up. Let them catch up eventually. It just feels so isolating and frustrating.",
+          "source": "hackernews"
+        }
+      ]
+    },
+    {
+      "id": "4f67a260-e105-41a2-84b8-3378bf90eb36",
+      "title": "Ableism and dismissal of ADHD struggles",
+      "description": "People with ADHD face dismissive comments like 'just try focusing' that trivialize their condition and reflect institutional ableism.",
+      "rubric": {
+        "is_genuine_current_frustration": true,
+        "has_verbatim_quote": true,
+        "user_segment_specific": true,
+        "all_pass": true
+      },
+      "passes_rubric": true,
+      "evidence": [
+        {
+          "source_url": "https://news.ycombinator.com/item?id=46814412",
+          "raw_quote": "I have ADHD, it's a common trope/meme at this point of Have you just tried focusing? Gee thanks, I'm cured!",
+          "source": "hackernews"
+        }
+      ]
+    }
+  ],
+  "top_scored_ideas": [
+    {
+      "idea_id": "51f278a0-7386-4b4d-9331-3f4c316ebc17",
+      "reasoning_trace": "The manual version is a founder acting as a peer accountability partner who checks in on the developer's IDE activity. Demand is a deep well: ADHD developers lose weeks to hyperfocus on side projects, and existing planners fail because they require manual logging. The schlep is building IDE plugins and handling privacy concerns, which is unsexy but valuable. Early adopters are members of r/ADHD_Programmers and the ADHD in Tech Slack workspace.",
+      "feasibility_rubric": {
+        "can_be_solved_manually_first": true,
+        "has_schlep_or_unsexy_advantage": true,
+        "can_2_3_person_team_build_mvp_in_6_months": true
+      },
+      "demand_rubric": {
+        "addresses_at_least_2_pain_points": true,
+        "is_painkiller_not_vitamin": true,
+        "has_clear_vein_of_early_adopters": true
+      },
+      "novelty_rubric": {
+        "differentiated_from_current_behavior": true,
+        "has_path_out_of_niche": true
+      },
+      "core_assumption": "Developers will allow a low-risk IDE monitoring tool and will accept the interrupt when it detects divergence.",
+      "fatal_flaws": [
+        {
+          "flaw": "Privacy concerns about IDE monitoring may deter users.",
+          "severity": "major"
+        },
+        {
+          "flaw": "The interrupt may be disabled or ignored by users.",
+          "severity": "minor"
+        }
+      ],
+      "yes_count": 8,
+      "total_checks": 8,
+      "verdict": "pursue",
+      "one_risk": "Users may disable the tool due to privacy concerns or annoyance.",
+      "rank": 2
+    }
+  ],
+  "can_revise": false,
+  "is_complete": false,
+  "approved_pitches": [],
+  "quarantined_pitches": []
+}

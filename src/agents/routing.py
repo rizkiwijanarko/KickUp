@@ -30,6 +30,7 @@ from typing import Any
 from src.constants import (
     ERROR_NO_PAIN_POINTS,
     ERROR_NO_SCORED_IDEAS,
+    MAX_INITIAL_MINING_ATTEMPTS,
     MAX_MINING_RETRIES,
     MIN_PAIN_POINTS_FOR_IDEAS,
 )
@@ -45,14 +46,17 @@ logger = logging.getLogger(__name__)
 
 
 def _should_mine(state: VentureForgeState) -> bool:
-    return not state.pain_points
+    """Initial mining run — before any retries or ideas exist."""
+    return not state.pain_points and state.pain_point_miner_revision_count == 0
 
 
 def _should_retry_mining(state: VentureForgeState) -> bool:
     return (
         not state.ideas
         and len(state.filtered_pain_points) < MIN_PAIN_POINTS_FOR_IDEAS
-        and state.pain_point_miner_revision_count < MAX_MINING_RETRIES
+        and state.pain_point_miner_revision_count < min(
+            MAX_MINING_RETRIES, MAX_INITIAL_MINING_ATTEMPTS - 1
+        )
     )
 
 

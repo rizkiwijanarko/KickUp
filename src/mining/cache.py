@@ -81,6 +81,9 @@ class SQLiteEvidenceCache:
 
                     items_data = json.loads(raw_json)
                     for item in items_data:
+                        # Never serve synthetic/fabricated evidence from cache
+                        if item.get("metadata", {}).get("synthetic"):
+                            continue
                         source_val = item.get("source", "web")
                         try:
                             source_enum = DataSource(source_val)
@@ -122,6 +125,9 @@ class SQLiteEvidenceCache:
         # Group by source
         by_source: dict[str, list[dict]] = {}
         for item in evidence:
+            # Never cache synthetic/fabricated evidence
+            if item.metadata.get("synthetic"):
+                continue
             src_name = item.source.value if hasattr(item.source, "value") else str(item.source)
             item_dict = {
                 "text": item.text,

@@ -2,7 +2,7 @@
 VentureForge Configuration
 ==========================
 Pydantic v2 settings loaded from environment variables.
-Single LLM_BASE_URL switches between OpenAI/OpenRouter/AMD vLLM.
+Single LLM_BASE_URL switches between OpenRouter/OpenAI/AMD vLLM.
 
 Usage:
     from src.config import settings
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # LLM Provider — REASONING tier (scorer, critic)
     # ------------------------------------------------------------------
     llm_base_url: str = Field(
-        default="https://api.openai.com/v1",
+        default="https://openrouter.ai/api/v1",
         description="OpenAI-compatible API base URL for reasoning tasks",
     )
     llm_api_key: str = Field(
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         description="API key for the reasoning LLM provider",
     )
     llm_model: str = Field(
-        default="gpt-4o-mini",
+        default="deepseek/deepseek-v4-flash-0731",
         description="Model name for reasoning tasks (scorer, critic)",
     )
 

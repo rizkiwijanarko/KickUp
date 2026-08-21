@@ -560,6 +560,7 @@ def convert_to_idea(
     idea_dict: Dict[str, Any],
     valid_pain_point_ids: set[UUID],
     min_refs: int = 2,
+    existing_id: UUID | None = None,
 ) -> Optional[Idea]:
     """
     Convert raw idea dict to Idea object with validation.
@@ -568,6 +569,7 @@ def convert_to_idea(
         idea_dict: Raw idea dictionary
         valid_pain_point_ids: Set of valid pain point UUIDs
         min_refs: Minimum number of pain point references required
+        existing_id: When set (revision mode), the Idea keeps its identity
 
     Returns:
         Idea object, or None if validation fails
@@ -596,7 +598,7 @@ def convert_to_idea(
 
     try:
         return Idea(
-            id=uuid4(),
+            id=existing_id or uuid4(),
             title=idea_dict["title"],
             one_liner=idea_dict["one_liner"],
             problem=idea_dict["problem"],
@@ -710,7 +712,12 @@ def run(state: VentureForgeState) -> Dict[str, Any]:
 
     validated: List[Idea] = []
     for raw in raw_ideas:
-        idea = convert_to_idea(raw, valid_ids, min_refs)
+        idea = convert_to_idea(
+            raw,
+            valid_ids,
+            min_refs,
+            existing_id=state.current_revision_idea_id,
+        )
         if idea:
             validated.append(idea)
             logger.debug(
@@ -726,10 +733,13 @@ def run(state: VentureForgeState) -> Dict[str, Any]:
         f"(required <= {count} with >={min_refs} real pain point refs each)"
     )
 
-    # Merge with existing ideas (if not in revision mode for this specific idea)
+    # Merge with existing ideas. In revision mode the refined idea REPLACES
+    # the previous one (same ID, identity-preserving) rather than appending,
+    # so the ideas list never holds duplicate IDs.
     if state.current_revision_idea_id:
-        # In revision mode: add the new idea(s) to existing ideas
-        all_ideas = state.ideas + final
+        all_ideas = [
+            i for i in state.ideas if i.id != state.current_revision_idea_id
+        ] + final
     else:
         # Initial generation: replace all ideas
         all_ideas = final

@@ -51,6 +51,7 @@ def run_pipeline(
     *,
     recursion_limit: int = 80,
     resume_run_id: str | None = None,
+    force_refresh: bool = False,
 ) -> VentureForgeState | dict[str, Any]:
     """Execute the full end-to-end pipeline with real-time stage progress reporting.
 
@@ -154,6 +155,11 @@ def main() -> None:
         default="output.json",
         help="Output JSON file path",
     )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Bypass the evidence cache and re-mine live sources (new runs only)",
+    )
     args = parser.parse_args()
 
     if args.resume:
@@ -166,6 +172,11 @@ def main() -> None:
     else:
         if not args.domain:
             parser.error("--domain is required for new runs (omit it when using --resume)")
+        if args.force_refresh:
+            import src.agents.pain_point_miner as ppm
+
+            ppm.force_refresh = True
+            print("Force-refresh enabled: bypassing evidence cache.")
         print(f"VentureForge starting: domain='{args.domain}'")
         result = run_pipeline(args.domain, args.max_pain_points)
 

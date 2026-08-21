@@ -304,7 +304,6 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
                 "competition_embraced_with_thesis",
                 "minimum_evidence_sources",
             ],
-            target_agent="idea_generator",
             revision_feedback="Target user is too broad and need more evidence sources.",
         )
         fake_llm.invoke.return_value = critique_mock
@@ -318,8 +317,9 @@ def test_wellformed_llm_response_parsed_correctly() -> None:
         critique: Critique = result["critique"]
         assert critique.approval_status == "revise", f"Got status={critique.approval_status}"
         assert critique.all_pass is False
-        assert critique.target_agent == "idea_generator", (
-            f"Expected idea_generator, got {critique.target_agent}"
+        # Positioning + evidence failures route to pitch_writer (matrix: evidence/claims wins)
+        assert critique.target_agent == "pitch_writer", (
+            f"Expected pitch_writer, got {critique.target_agent}"
         )
         assert len(critique.failing_checks) == 3, (
             f"Expected 3 failing checks, got {critique.failing_checks}"

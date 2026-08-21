@@ -70,15 +70,14 @@ def test_composite_miner_with_mock_providers():
     assert len(available) == 2
     assert [p.name for p in available] == ["hackernews", "tavily"]
 
-    # Ingest: with 2 live items (< HYBRID_AUGMENTATION_THRESHOLD=8), hybrid augmentation yields 6 items
+    # Ingest: only live items are returned (no synthetic augmentation)
     evidence = miner.mine("microservices", min_total_evidence=10)
-    assert len(evidence) == 6
+    assert len(evidence) == 2
     urls = [e.url for e in evidence]
     assert "https://news.ycombinator.com/item?id=101" in urls
     assert "https://dev.to/article/102" in urls
-    # Verify synthetic items are present
-    synthetic_count = sum(1 for e in evidence if e.metadata.get("synthetic"))
-    assert synthetic_count == 4
+    # Verify no synthetic items are ever injected
+    assert all(not e.metadata.get("synthetic") for e in evidence)
 
     # Validate quote helper
     found = miner.validate_quote("excruciatingly slow", evidence)
@@ -90,7 +89,7 @@ def test_composite_miner_with_mock_providers():
 
 
 def test_composite_miner_engagement_sorting_and_no_augmentation():
-    # 10 items (> HYBRID_AUGMENTATION_THRESHOLD=8) with different scores
+    # 10 items with different scores — no augmentation, all live items kept
     items = [
         RawEvidence(
             text=f"Sample evidence text item {i} describing friction in developer tools.",

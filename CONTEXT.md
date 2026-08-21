@@ -29,8 +29,20 @@ A factual grounding assessment from the Critic verifying that every claim and pa
 _Avoid_: Code review, evaluation, feedback
 
 **Revision**:
-A targeted reflection cycle that routes Critic feedback to a specific worker agent to fix groundedness or rubric failures.
-_Avoid_: Retry, rerun, loop
+An identity-preserving refinement cycle that routes Critic feedback to a specific worker agent, which surgically modifies the failing dimensions of the existing artifact while keeping its ID (and passing sections) intact.
+_Avoid_: Retry, rerun, loop, replacement
+
+**Ideation Round**:
+A fresh-idea generation pass producing new ideas with new IDs (distinct from a Revision, which preserves identity). Used for initial generation and for "all ideas parked" recovery, never for refining a failed idea.
+_Avoid_: Reroll, idea revision, regeneration
+
+**Evidence-Backed Claims**:
+The requirement that every factual claim in a Pitch Brief (market size, user count, behavior prevalence) trace to a source URL in the mined evidence. Without a research agent, numeric statistics must not be invented; claims are framed qualitatively from the evidence or marked as unverified estimates.
+_Avoid_: Invented statistics, unsourced market figures, fake numbers
+
+**Contained Fire**:
+The target-market criterion requiring the Pitch Brief's `target_user` to be a specific, named, reachable community (e.g. "r/ADHD_Programmers"), where a founder could identify 50 members by name within a week. A demographic without a named community fails this check.
+_Avoid_: Broad demographic, generic segment
 
 **Data Miner**:
 The unified ingestion subsystem responsible for searching and extracting grounded evidence across external sources.
@@ -56,17 +68,17 @@ _Avoid_: Hard reset, wipeout, pipeline flush
 The scoring constraint requiring pitch briefs to be authored only for ideas receiving a 'pursue' verdict (no fatal flaws and passing demand/feasibility rubrics), triggering an idea generator reflection if 0 ideas qualify.
 _Avoid_: Top scoring filter, greedy selection
 
-**Synthetic Evidence Mode**:
-The resiliency fallback mechanism that synthesizes plausible grounded domain evidence when external scrapers and APIs are unavailable or rate-limited.
-_Avoid_: Fake data mode, dummy mode, offline stub
-
 **Engagement-Ranked Evidence**:
 Raw evidence sorted by composite engagement metrics (upvotes, comment volume, domain keyword density) before prompt ingestion.
 _Avoid_: Top comments, popular posts
 
-**Hybrid Evidence Augmentation**:
-The resiliency mechanism that automatically supplements sparse live evidence below the minimum threshold with domain-grounded synthetic evidence to ensure seamless pipeline execution.
-_Avoid_: Padding, fallback blend
+**Per-Source Evidence Cap**:
+The serialization window is capped per source (8 items) before the global 15-item limit so one high-volume provider cannot crowd out diverse sources.
+_Avoid_: Global-only truncation, source monopolies
+
+**Live-Evidence-Only Policy**:
+The pipeline only ingests grounded evidence from real sources; sparse or unavailable live data surfaces as a shortfall rather than being padded with fabricated items.
+_Avoid_: Synthetic fallback, fake data mode, dummy mode, offline stub
 
 **Multi-Evidence Clustering**:
 The synthesis pattern of grouping multiple distinct verbatim quotes across sources into a single validated Pain Point with 2+ grounded evidence references.

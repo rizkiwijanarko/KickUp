@@ -45,6 +45,8 @@ class YouTubeProvider:
                         url=c.url,
                         source=DataSource.YOUTUBE,
                         title=c.post_title,
+                        score=int(c.score or 0),
+                        metadata={"likes": c.score},
                     )
                 )
             return results

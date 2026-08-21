@@ -271,7 +271,7 @@ def _build_success_patch(
     """
     message = _build_critique_message(critique, at_max_revisions, state.max_revisions)
 
-    # Accumulate into critiques list so historical decisions persist across multiple briefs
+    # Replace the latest critique for this idea in the canonical snapshot.
     updated_critiques = [c for c in state.critiques if c.idea_id != critique.idea_id] + [critique]
 
     patch = {

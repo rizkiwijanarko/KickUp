@@ -31,7 +31,8 @@ class Critique(BaseModel):
     all_pass: bool
     approval_status: Literal["approved", "revise", "max_revisions_reached"]
     failing_checks: list[str] = Field(default_factory=list)
-    target_agent: Literal["pain_point_miner", "idea_generator", "pitch_writer"]
+    # Computed by the model validator from the rubric — never supplied by the LLM.
+    target_agent: Literal["pain_point_miner", "idea_generator", "pitch_writer"] = "pitch_writer"
     revision_feedback: str = Field(..., min_length=10)
 
     @model_validator(mode="after")
@@ -44,30 +45,22 @@ class Critique(BaseModel):
         # Approval status derived solely from rubric
         self.approval_status = "approved" if self.all_pass else "revise"
 
-        # Enforce target_agent priority only when revision is required
+        # Enforce target_agent priority only when revision is required.
+        # The routing matrix is computed here — the LLM never chooses target_agent.
         if not self.all_pass:
             r = self.rubric
-            hallucinated_urls = not r.no_hallucinated_source_urls
             weak_claims = not r.all_claims_evidence_backed
             insufficient_sources = not r.minimum_evidence_sources
-            scorer_issue = not r.scorer_verdict_justified
             positioning_failed = (not r.target_is_contained_fire) or (
                 not r.competition_embraced_with_thesis
             )
-            writing_failed = not r.tagline_under_12_words
-            validation_plan_failed = not r.validation_plan_complete
 
-            if hallucinated_urls:
-                self.target_agent = "pitch_writer"
-            elif positioning_failed or scorer_issue:
+            if positioning_failed and not (weak_claims or insufficient_sources):
+                # The only idea-level failing dimension: target_user lives on the Idea.
                 self.target_agent = "idea_generator"
-            elif insufficient_sources:
-                self.target_agent = "pitch_writer"
-            elif validation_plan_failed or writing_failed:
-                self.target_agent = "pitch_writer"
-            elif weak_claims and not hallucinated_urls:
-                self.target_agent = "pitch_writer"
             else:
+                # Every other failing dimension is a pitch-brief property
+                # (evidence_links, claims, tagline, validation plan, scorer alignment).
                 self.target_agent = "pitch_writer"
 
         return self

@@ -30,7 +30,14 @@ def test_pain_point_model_and_rubric():
             source_url="https://news.ycombinator.com/item?id=123",
             raw_quote="Debugging flaky async tests in CI takes 4 hours every week.",
             source=DataSource.HACKERNEWS,
-        )
+            score=150,
+        ),
+        PainPointEvidence(
+            source_url="https://news.ycombinator.com/item?id=456",
+            raw_quote="Non-deterministic failures block our deploys constantly.",
+            source=DataSource.HACKERNEWS,
+            score=80,
+        ),
     ]
     rubric = PainPointRubric(
         is_genuine_current_frustration=True,
@@ -48,8 +55,9 @@ def test_pain_point_model_and_rubric():
     )
 
     assert pp.source_url == "https://news.ycombinator.com/item?id=123"
-    assert pp.evidence_count == 1
+    assert pp.evidence_count == 2
     assert pp.source == DataSource.HACKERNEWS
+    assert pp.strength == 230  # 150 + 80
 
 
 def test_scored_idea_verdict_derivation():
@@ -268,7 +276,6 @@ def test_approved_and_quarantined_pitches_segregation():
         rubric=rubric_fail,
         all_pass=False,
         approval_status="max_revisions_reached",
-        target_agent="pain_point_miner",
         revision_feedback="Max revisions reached.",
     )
 

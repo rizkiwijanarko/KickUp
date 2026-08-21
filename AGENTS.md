@@ -7,7 +7,7 @@ VentureForge is a hierarchical LangGraph multi-agent pipeline that mines market 
 - **Ignored Directories**: Treat as non-existent: `.venv/`, `__pycache__/`, `.cache/`, `.mypy_cache/`, `.ruff_cache/`, `dist/`, `build/`, `*.egg-info/`.
 - **Pure State Transformers**: Never mutate `VentureForgeState` in-place. Agents must return patch dicts for `model_copy(update=...)`.
 - **Graph Specification**: Always keep `src/graph.py` synchronized with `orchestration.json`.
-- **Token Savior MCP Enforcement**: Always prioritize using `token-savior` MCP tools (`search_codebase`, `find_symbol`, `get_function_source`, `get_class_source`, `get_edit_context`, `replace_symbol_source`) over full-file views or blind grep to minimize context token usage.
+- **Token Savior MCP Enforcement**: Use the project-scoped `token-savior` MCP server from `.mcp.json`. It is provided by `token-savior-recall[mcp]` and exposes the `token-savior` executable. Prefer its structural navigation, precision editing, and impact-analysis tools over whole-file source reads or blind grep to minimize context token usage.
 
 ## Development Commands
 

@@ -16,13 +16,14 @@ Run with:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from src.agents.critic import run as run_critic
+from src.agents.critic import _build_success_patch, run as run_critic
 from src.agents.orchestrator import orchestrator
 from src.agents.routing import _should_critique
-from src.state.graph_state import RevisionLedger, VentureForgeState
+from src.state.graph_state import VentureForgeState
 from src.state.schema import (
     CompetitiveLandscape,
     Critique,
@@ -68,7 +69,7 @@ def _make_critique(idea_id, *, all_pass: bool, target_agent: str = "idea_generat
         approval_status="approved" if all_pass else "revise",
         failing_checks=[] if all_pass else ["target_is_contained_fire"],
         target_agent=target_agent,
-        revision_feedback="All good." if all_pass else "Target is too broad.",
+        revision_feedback="Everything looks good." if all_pass else "Target is too broad.",
     )
 
 
@@ -181,7 +182,7 @@ def test_revision_ledger_all_critiques_deduplicates_correctly() -> None:
     critique_v1 = _make_critique(idea_id, all_pass=False)
     critique_v2 = _make_critique(idea_id, all_pass=True)  # second version, same idea
 
-    # Simulate: critiques has v1 (historical), critique has v2 (latest)
+    # Simulate a stale plural entry plus the active latest critique.
     state = state.model_copy(update={
         "critiques": [critique_v1],
         "critique": critique_v2,
@@ -190,11 +191,8 @@ def test_revision_ledger_all_critiques_deduplicates_correctly() -> None:
     ledger = state.revisions
     all_c = ledger.all_critiques
 
-    # Should contain both (history is preserved), but _latest_by_idea should use v2
-    idea_ids = [c.idea_id for c in all_c]
-    assert idea_id in idea_ids, "idea_id must appear in all_critiques"
+    assert all_c == [critique_v2], "all_critiques must contain one latest entry per idea"
 
-    # latest_by_idea → v2 should win (last one in list, since all_critiques appends critique after)
     latest = ledger._latest_by_idea()
     assert latest[idea_id].all_pass is True, (
         f"Latest critique for idea should be v2 (all_pass=True), got all_pass={latest[idea_id].all_pass}"
@@ -271,9 +269,8 @@ def test_critiques_list_not_doubled_after_bump_and_rebuild() -> None:
     """After critique → bump_revision → re-critique, critiques list must not
     accumulate duplicate entries for the same idea_id.
 
-    Root cause being tested: bump_revision appends to critiques, then
-    _build_success_patch also filters-and-appends. If both fire for the same idea,
-    we should end up with exactly ONE entry per idea_id (the latest).
+    Revision metadata updates must not compete with the critic's canonical
+    latest-per-idea critique snapshot.
     """
     state, idea, _, brief = _make_minimal_state()
     idea_id = idea.id
@@ -284,22 +281,13 @@ def test_critiques_list_not_doubled_after_bump_and_rebuild() -> None:
     bump_patch = state.bump_revision(critique_v1)
     state_after_bump = state.model_copy(update=bump_patch)
 
-    # critiques list should have critique_v1 appended once
-    assert len(state_after_bump.critiques) == 1, (
-        f"Expected 1 critique after bump, got {len(state_after_bump.critiques)}"
-    )
+    assert "critiques" not in bump_patch
+    assert state_after_bump.critiques == state.critiques
 
-    # Step 2: Simulate critic re-runs and produces critique_v2 (now passing)
+    # Step 2: Exercise the production critic patch builder.
     critique_v2 = _make_critique(idea_id, all_pass=True)
-    # _build_success_patch logic: filter out existing for idea_id + append new
-    updated_critiques = [
-        c for c in state_after_bump.critiques if c.idea_id != idea_id
-    ] + [critique_v2]
-
-    state_after_rereview = state_after_bump.model_copy(update={
-        "critique": critique_v2,
-        "critiques": updated_critiques,
-    })
+    success_patch = _build_success_patch(state_after_bump, critique_v2, at_max_revisions=False)
+    state_after_rereview = state_after_bump.model_copy(update=success_patch)
 
     # Should have exactly 1 critique for this idea (v2 replaced v1)
     idea_critiques = [c for c in state_after_rereview.critiques if c.idea_id == idea_id]
@@ -312,6 +300,39 @@ def test_critiques_list_not_doubled_after_bump_and_rebuild() -> None:
     ledger = state_after_rereview.revisions
     assert idea_id in ledger.approved_idea_ids, "Idea should be approved after passing re-critique"
     print("  PASS")
+
+
+def test_repeated_failed_revisions_keep_only_latest_critique() -> None:
+    """Repeated failures followed by approval retain one latest critique."""
+    state, idea, scored, brief = _make_minimal_state(max_revisions=3)
+    idea_id = idea.id
+
+    for critique in (
+        _make_critique(idea_id, all_pass=False),
+        _make_critique(idea_id, all_pass=False),
+    ):
+        state = state.model_copy(update={"critique": critique})
+        revision_patch = orchestrator(state)
+        assert revision_patch["next_node"] == "idea_generator"
+        state = state.model_copy(update=revision_patch)
+        assert "critiques" not in revision_patch
+        state = state.model_copy(update={
+            "critique": None,
+            "pitch_briefs": [brief],
+            "ideas": [idea],
+            "scored_ideas": [scored],
+        })
+
+    final_critique = _make_critique(idea_id, all_pass=True)
+    state = state.model_copy(update={
+        "critique": final_critique,
+        "critiques": [final_critique],
+    })
+
+    assert state.revisions.count(idea_id) == 2
+    assert state.revisions.all_critiques == [final_critique]
+    assert idea_id in state.revisions.approved_idea_ids
+    assert state.revisions.pending_briefs(state.pitch_briefs) == []
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +432,7 @@ def test_critic_idea_id_locked_to_reviewed_brief_not_llm_output() -> None:
             approval_status="approved",
             failing_checks=[],
             target_agent="pitch_writer",
-            revision_feedback="All good.",
+            revision_feedback="Everything looks good.",
         )
         mock_get_llm.return_value = fake_llm
 
@@ -438,7 +459,7 @@ def test_orchestrator_routes_correctly_through_full_critique_revise_approve_cycl
     3. After revision, critique=None + pending brief → routes back to critic
     4. Critic returns passing critique → routes to completion
     """
-    state, idea, _, brief = _make_minimal_state()
+    state, idea, scored, brief = _make_minimal_state()
     idea_id = idea.id
 
     # Step 1: No critique yet → should route to critic
@@ -464,6 +485,7 @@ def test_orchestrator_routes_correctly_through_full_critique_revise_approve_cycl
         "critique": None,
         "pitch_briefs": [brief],  # brief is back after revision
         "ideas": [idea],
+        "scored_ideas": [scored],
     })
     patch3 = orchestrator(state)
     # With critique=None + pending brief → should go back to critic
@@ -491,6 +513,154 @@ def test_orchestrator_routes_correctly_through_full_critique_revise_approve_cycl
     print("  PASS")
 
 
+def test_mining_failure_exhausts_budget_and_fails_not_loops() -> None:
+    """Persistent mining failure must terminate in a FAILED state, not loop."""
+    state, _, _, brief = _make_minimal_state()
+    exhausted_budget = state.model_copy(update={
+        "pain_points": [],
+        "ideas": [],
+        "pain_point_miner_revision_count": 2,
+        "pitch_briefs": [brief],
+    })
+
+    patch = orchestrator(exhausted_budget)
+    assert patch["next_node"] == "__end__"
+    assert patch["current_stage"] == PipelineStage.FAILED
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Computed target_agent routing matrix
+# ---------------------------------------------------------------------------
+
+
+def test_target_agent_computed_from_rubric_routing_matrix() -> None:
+    """target_agent must be derived from the rubric, never from the LLM.
+
+    - positioning-only failures -> idea_generator
+    - any evidence/claims failure -> pitch_writer (even alongside positioning)
+    - pure pitch failures (tagline, validation) -> pitch_writer
+    """
+    from src.models.critique import CritiqueRubric as CR
+
+    def make(rubric: CR) -> str:
+        c = Critique(
+            idea_id=uuid4(),
+            reasoning_trace="test",
+            rubric=rubric,
+            all_pass=False,
+            approval_status="revise",
+            revision_feedback="Fix the pitch.",
+        )
+        return c.target_agent
+
+    positioning_only = CR(
+        all_claims_evidence_backed=True,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=True,
+        target_is_contained_fire=False,
+        competition_embraced_with_thesis=False,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    assert make(positioning_only) == "idea_generator"
+
+    positioning_plus_claims = CR(
+        all_claims_evidence_backed=False,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=True,
+        target_is_contained_fire=False,
+        competition_embraced_with_thesis=False,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    assert make(positioning_plus_claims) == "pitch_writer"
+
+    evidence_only = CR(
+        all_claims_evidence_backed=True,
+        no_hallucinated_source_urls=False,
+        tagline_under_12_words=True,
+        target_is_contained_fire=True,
+        competition_embraced_with_thesis=True,
+        minimum_evidence_sources=False,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    assert make(evidence_only) == "pitch_writer"
+
+    scorer_issue_only = CR(
+        all_claims_evidence_backed=True,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=True,
+        target_is_contained_fire=True,
+        competition_embraced_with_thesis=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=False,
+        validation_plan_complete=True,
+    )
+    assert make(scorer_issue_only) == "pitch_writer"
+
+    tagline_only = CR(
+        all_claims_evidence_backed=True,
+        no_hallucinated_source_urls=True,
+        tagline_under_12_words=False,
+        target_is_contained_fire=True,
+        competition_embraced_with_thesis=True,
+        minimum_evidence_sources=True,
+        scorer_verdict_justified=True,
+        validation_plan_complete=True,
+    )
+    assert make(tagline_only) == "pitch_writer"
+    print("  PASS")
+
+
+def test_idea_generator_revision_preserves_idea_id() -> None:
+    """In revision mode, idea_generator must keep the target idea's ID
+    (identity-preserving revision), not mint a fresh UUID."""
+    from src.agents.idea_generator import run as run_idea_generator
+
+    state, idea, scored, brief = _make_minimal_state()
+
+    # Simulate orchestrator routing to idea_generator for a positioning revision
+    state = state.model_copy(
+        update={
+            "current_revision_idea_id": idea.id,
+            "revision_feedback": "Target user is too broad; define a specific reachable community.",
+        }
+    )
+
+    payload = {
+        "title": "Docker Compose Debugger Refined",
+        "one_liner": "Visual Docker Compose debugging.",
+        "problem": "Long enough problem statement for schema validation purposes.",
+        "solution": "Long enough solution description for schema validation purposes.",
+        "target_user": "r/docker power users",
+        "key_features": ["A", "B", "C"],
+        "addresses_pain_point_ids": [str(pp.id) for pp in state.filtered_pain_points],
+    }
+
+    def _fake_invoke(messages):  # type: ignore[no-untyped-def]
+        fake_resp = MagicMock()
+        fake_resp.content = json.dumps(payload)
+        return fake_resp
+
+    with patch("src.agents.idea_generator.get_llm") as mock_get_llm:
+        fake_llm = MagicMock()
+        fake_llm.invoke.side_effect = _fake_invoke
+        mock_get_llm.return_value = fake_llm
+
+        result = run_idea_generator(state)
+
+    assert result["ideas"], "Expected refined idea from idea_generator"
+    refined = result["ideas"][0]
+    assert refined.id == idea.id, (
+        f"Revision must preserve idea ID: expected {idea.id}, got {refined.id}"
+    )
+    assert refined.title == "Docker Compose Debugger Refined"
+    print("  PASS")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -501,10 +671,13 @@ _TESTS = [
     ("_should_critique=True when critique=None + pending", test_should_critique_is_true_when_critique_is_none_and_pending_briefs_exist),
     ("_should_critique=False when critique matches pending", test_should_critique_is_false_when_current_critique_matches_pending_brief),
     ("critiques list not doubled after bump+rebuild", test_critiques_list_not_doubled_after_bump_and_rebuild),
+    ("mining failure exhausted budget -> FAILED", test_mining_failure_exhausts_budget_and_fails_not_loops),
     ("pending_briefs empty → orchestrator completes", test_pending_briefs_empty_after_all_approved_triggers_completion),
     ("quarantined via revision_counts fallback", test_quarantined_ids_detected_via_revision_counts_not_just_approval_status),
     ("critic locks idea_id to reviewed brief", test_critic_idea_id_locked_to_reviewed_brief_not_llm_output),
     ("full critique→revise→approve cycle", test_orchestrator_routes_correctly_through_full_critique_revise_approve_cycle),
+    ("computed target_agent routing matrix", test_target_agent_computed_from_rubric_routing_matrix),
+    ("idea_generator revision preserves idea ID", test_idea_generator_revision_preserves_idea_id),
 ]
 
 

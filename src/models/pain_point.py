@@ -29,6 +29,8 @@ class PainPointEvidence(BaseModel):
     source_url: str = Field(..., min_length=5)
     raw_quote: str = Field(..., min_length=5)
     source: DataSource
+    # Composite engagement score of the source comment/post (0 if unknown).
+    score: int = 0
 
 
 class PainPoint(BaseModel):
@@ -63,3 +65,9 @@ class PainPoint(BaseModel):
     def evidence_count(self) -> int:
         """Number of evidence sources."""
         return len(self.evidence)
+
+    @computed_field
+    @property
+    def strength(self) -> int:
+        """Aggregate engagement strength across all evidence (sum of scores)."""
+        return sum(ev.score for ev in self.evidence)

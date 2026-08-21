@@ -51,6 +51,8 @@ class RedditProvider:
                         url=c.url,
                         source=DataSource.REDDIT,
                         title=c.post_title,
+                        score=int((c.score or 0) * 1.0 + (c.num_comments or 0) * 0.5),
+                        metadata={"points": c.score, "num_comments": c.num_comments},
                     )
                 )
             return results
