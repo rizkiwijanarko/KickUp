@@ -198,3 +198,56 @@ def test_revision_count_increments() -> None:
     briefs: list[PitchBrief] = result["pitch_briefs"]
     assert len(briefs) == 1
     assert briefs[0].revision_count == 1
+
+
+def test_tagline_auto_trimming() -> None:
+    """Test that taglines longer than 12 words are auto-trimmed cleanly."""
+    long_tagline = "This is a very long and detailed tagline that has far more than twelve words in it"
+    brief = PitchBrief(
+        idea_id=uuid4(),
+        title="Test App",
+        tagline=long_tagline,
+        problem="This is a sufficiently long problem description for testing purposes.",
+        solution="This is a sufficiently long solution description for testing purposes.",
+        target_user="Target users",
+        market_opportunity="A very large market opportunity that passes validation.",
+        competitive_landscape=CompetitiveLandscape(
+            current_behavior="Developers manually manage configurations using raw YAML files.",
+            direct_competitors="Existing legacy tools and manual bash scripts.",
+            real_enemy="Habitual inertia and lack of real-time diagnostics.",
+        ),
+        differentiation="Much better and faster than existing alternatives with real-time feedback.",
+        validation_plan=ValidationPlan(
+            discovery_questions=["Question one for discovery?", "Question two for discovery?", "Question three for discovery?", "Question four for discovery?", "Question five for discovery?"],
+            validation_criteria="Clear validation criteria that proves the customer pain point is acute.",
+        ),
+        business_model="SaaS subscription model.",
+        go_to_market="Direct developer outreach.",
+        key_risk="Adoption friction.",
+        next_steps="Interview 5 users.",
+        evidence_links=["https://example.com/1", "https://example.com/2"],
+        markdown_content="# Test App\n\nFull pitch markdown content that is guaranteed to be well over one hundred characters in length to satisfy schema validation constraints.",
+    )
+    assert len(brief.tagline.split()) <= 12
+    assert brief.tagline == "This is a very long and detailed tagline that has far more"
+
+
+def test_best_effort_graduation_when_all_ideas_parked() -> None:
+    """When top_scored_ideas is empty but scored_ideas exists (all parked), pitch_writer picks highest score."""
+    state = _make_minimal_state()
+    idea = state.ideas[0]
+    parked_scored = state.scored_ideas[0].model_copy(update={"verdict": Verdict.PARK, "yes_count": 4})
+    state = state.model_copy(update={"scored_ideas": [parked_scored]})
+
+    assert len(state.top_scored_ideas) == 0
+
+    with patch("src.agents.pitch_writer.get_structured_llm") as mock_get_llm:
+        fake_llm = MagicMock()
+        fake_llm.invoke.return_value = _make_pitch_brief_obj(idea.id)
+        mock_get_llm.return_value = fake_llm
+
+        result = run_pitch_writer(state)
+
+    briefs: list[PitchBrief] = result["pitch_briefs"]
+    assert len(briefs) == 1
+    assert briefs[0].idea_id == idea.id

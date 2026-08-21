@@ -113,7 +113,8 @@ def download_pitches(state) -> str:
     
     content = f"# Pitch Briefs - {state.domain}\n\n"
     content += f"**Run ID:** {state.run_id}\n"
-    content += f"**Total Pitches:** {len(state.pitch_briefs)}\n\n"
+    content += f"**Approved Pitches:** {len(state.approved_pitches)}\n"
+    content += f"**Quarantined Pitches:** {len(state.quarantined_pitches)}\n\n"
     content += "---\n\n"
     content += format_pitches(state)
     
@@ -309,26 +310,65 @@ def format_scored_ideas(state) -> str:
 
 
 def format_pitches(state) -> str:
-    """Format pitch briefs for display."""
+    """Format pitch briefs for display, segregating approved briefs from quarantined briefs."""
     if not state or not state.pitch_briefs:
         return "No pitches yet"
 
+    approved = state.approved_pitches
+    quarantined = state.quarantined_pitches
     output = []
-    for i, pitch in enumerate(state.pitch_briefs, 1):
-        output.append(
-            f"### {i}. {pitch.title}\n"
-            f"**Tagline:** {pitch.tagline}\n"
-            f"**Target User:** {pitch.target_user}\n"
-            f"**Revision Count:** {pitch.revision_count}\n\n"
-        )
 
-        if pitch.evidence_links:
-            output.append("**Evidence Links:**\n")
-            for link in pitch.evidence_links:
-                output.append(f"- [{link}]({link})\n")
-            output.append("\n")
+    if approved:
+        output.append(f"# 🏆 Approved Pitch Briefs ({len(approved)})\n\n")
+        output.append("> **Investor Ready**: These startup pitch briefs have passed 100% of the Critic's binary verification rubrics.\n\n")
+        for i, pitch in enumerate(approved, 1):
+            output.append(
+                f"## {i}. {pitch.title} `[APPROVED - 100% VERIFIED]`\n\n"
+                f"**Tagline:** *\"{pitch.tagline}\"*\n\n"
+                f"**Target User:** {pitch.target_user} | **Revisions:** {pitch.revision_count}\n\n"
+            )
+            if pitch.evidence_links:
+                output.append("**Verified Primary Sources:**\n")
+                for link in pitch.evidence_links:
+                    output.append(f"- [{link}]({link})\n")
+                output.append("\n")
+            output.append(f"### Executive Pitch Deck\n\n{pitch.markdown_content}\n\n---\n\n")
 
-        output.append(f"## Full Pitch\n\n{pitch.markdown_content}\n\n---\n\n")
+    if quarantined:
+        output.append(f"# ⚠️ Quarantined Pitch Briefs ({len(quarantined)})\n\n")
+        output.append("> **Review Required**: These briefs reached maximum reflection revisions without satisfying all Critic rubric checks. Preserved below with flaw diagnostics.\n\n")
+        latest_critiques = {c.idea_id: c for c in state.critiques}
+        for i, pitch in enumerate(quarantined, 1):
+            crit = latest_critiques.get(pitch.idea_id)
+            failing_str = ""
+            if crit and crit.failing_checks:
+                failing_str = "\n".join(f"- ❌ {fc}" for fc in crit.failing_checks)
+            feedback_str = crit.revision_feedback if crit else "Unresolved critique check."
+            output.append(
+                f"## {i}. {pitch.title} `[QUARANTINED - AUDIT REQUIRED]`\n\n"
+                f"**Tagline:** *\"{pitch.tagline}\"*\n\n"
+                f"**Target User:** {pitch.target_user} | **Revisions Attempted:** {pitch.revision_count}\n\n"
+                f"**Diagnostic Flaw Report:**\n"
+                f"{failing_str}\n\n"
+                f"**Critic Feedback:** *{feedback_str}*\n\n"
+            )
+            if pitch.evidence_links:
+                output.append("**Evidence Links:**\n")
+                for link in pitch.evidence_links:
+                    output.append(f"- [{link}]({link})\n")
+                output.append("\n")
+            output.append(f"### Pitch Brief Content\n\n{pitch.markdown_content}\n\n---\n\n")
+
+    # If all pitches are still pending critique
+    if not approved and not quarantined:
+        for i, pitch in enumerate(state.pitch_briefs, 1):
+            output.append(
+                f"### {i}. {pitch.title} `[CRITIQUE PENDING]`\n\n"
+                f"**Tagline:** {pitch.tagline}\n\n"
+                f"**Target User:** {pitch.target_user}\n\n"
+                f"## Full Pitch\n\n{pitch.markdown_content}\n\n---\n\n"
+            )
+
     return "".join(output)
 
 
@@ -509,33 +549,53 @@ def start_pipeline(
 def update_progress(run_id: str) -> tuple[str, str, str, str, str, str, str]:
     """Poll for state updates and return new UI state with notifications."""
     global _previous_stage
-    
-    if not run_id or not is_run_active():
+
+    if not run_id:
         return gr.skip()
 
     state = poll_state(run_id)
     if state is None:
         return gr.skip()
-    
-    # Check for stage changes and send notifications
+
+    active = is_run_active()
     prev_stage = _previous_stage.get(run_id)
     current_stage = state.current_stage
-    
+
+    # If run has stopped/completed and we already processed the final stage update, skip
+    if (
+        not active
+        and prev_stage == current_stage
+        and current_stage
+        in (PipelineStage.COMPLETED, PipelineStage.FAILED, PipelineStage.CANCELLED)
+    ):
+        return gr.skip()
+
+    # Check for stage changes and send notifications
     if prev_stage != current_stage:
         _previous_stage[run_id] = current_stage
-        
+
         # Send notifications for important stage transitions
         if current_stage == PipelineStage.COMPLETED:
-            gr.Info(f"✅ Pipeline completed! Generated {len(state.pitch_briefs)} pitch brief(s).")
+            gr.Info(
+                f"✅ Pipeline completed! Generated {len(state.pitch_briefs)} pitch brief(s)."
+            )
         elif current_stage == PipelineStage.FAILED:
             gr.Warning(f"❌ Pipeline failed. Check the error log for details.")
         elif current_stage == PipelineStage.CANCELLED:
             gr.Info("🛑 Pipeline cancelled by user.")
-        elif current_stage == PipelineStage.GENERATING and len(state.pain_points) > 0:
-            gr.Info(f"⛏️ Mining complete! Found {len(state.pain_points)} pain points.")
+        elif (
+            current_stage == PipelineStage.GENERATING
+            and len(state.pain_points) > 0
+        ):
+            gr.Info(
+                f"⛏️ Mining complete! Found {len(state.pain_points)} pain points."
+            )
         elif current_stage == PipelineStage.SCORING and len(state.ideas) > 0:
             gr.Info(f"💡 Generated {len(state.ideas)} startup ideas.")
-        elif current_stage == PipelineStage.WRITING and len(state.scored_ideas) > 0:
+        elif (
+            current_stage == PipelineStage.WRITING
+            and len(state.scored_ideas) > 0
+        ):
             gr.Info(f"📊 Scored {len(state.scored_ideas)} ideas.")
 
     return (

@@ -220,12 +220,32 @@ def test_marks_completed_when_cannot_revise() -> None:
     print("  PASS")
 
 
+def test_orchestrator_best_effort_graduation_when_max_revisions_reached() -> None:
+    """When all ideas are parked and cannot revise, orchestrator graduates best idea to pitch_writer."""
+    state = _make_full_state_with_critique(all_pass=False, max_revisions=1, revision_count=0)
+    # Remove top scored ideas and pitch briefs, simulate all ideas parked
+    parked_scored = state.scored_ideas[0].model_copy(update={"verdict": "park", "yes_count": 3})
+    state = state.model_copy(update={
+        "scored_ideas": [parked_scored],
+        "pitch_briefs": [],
+        "critique": None,
+        "revision_counts": {str(parked_scored.idea_id): 1},  # already revised once
+    })
+    assert state.can_revise is False
+
+    patch = orchestrator(state)
+    assert patch["current_stage"] == PipelineStage.WRITING
+    assert patch["next_node"] == "pitch_writer"
+    print("  PASS")
+
+
 _TESTS = [
     ("Routes to mining when no pain points", test_routes_to_mining_when_no_pain_points),
     ("Routes to generator when no ideas", test_routes_to_generator_when_no_ideas),
     ("Reflection loop bumps revision + resets downstream", test_reflection_loop_bumps_revision_and_resets_downstream),
     ("Marks completed when critique passes", test_marks_completed_when_critique_passes),
     ("Marks completed when cannot revise", test_marks_completed_when_cannot_revise),
+    ("Best-effort graduation on max revisions", test_orchestrator_best_effort_graduation_when_max_revisions_reached),
 ]
 
 

@@ -65,7 +65,8 @@ def get_llm(
         "model": model_name,
         "temperature": temperature if temperature is not None else settings.default_temperature,
         "max_tokens": safe_max_tokens,
-        "timeout": config["timeout"],
+        "timeout": float(config.get("timeout") or 120),
+        "max_retries": 3,
     }
 
     # Add OpenRouter-specific headers if using OpenRouter
@@ -120,6 +121,14 @@ def get_llm(
             f"max_tokens={safe_max_tokens}"
         )
     
+    # DeepSeek configuration on OpenRouter
+    is_deepseek = "deepseek" in model_name.lower()
+    if is_deepseek and not reasoning:
+        base_params.setdefault("extra_body", {})["chat_template_kwargs"] = {"enable_thinking": False}
+        logging.getLogger(__name__).info(
+            f"[llm_client] DeepSeek detected (non-reasoning): disabled thinking mode for fast structured generation."
+        )
+
     return ChatOpenAI(**base_params)
 
 
@@ -129,6 +138,7 @@ def get_structured_llm(
     *,
     temperature: float | None = None,
     model: str | None = None,
+    max_tokens: int | None = 16384,
     reasoning: bool = False,
 ) -> BaseChatModel:
     """
@@ -138,9 +148,10 @@ def get_structured_llm(
         output_schema: A Pydantic v2 BaseModel subclass describing the desired output.
         temperature: Override default temperature.
         model: Override default model name.
+        max_tokens: Override default max tokens (defaults to 16384 for structured outputs).
         reasoning: True for heavy reasoning tasks.
     """
-    base = get_llm(temperature=temperature, model=model, reasoning=reasoning)
+    base = get_llm(temperature=temperature, model=model, max_tokens=max_tokens, reasoning=reasoning)
     return base.with_structured_output(output_schema)
 
 
@@ -177,46 +188,61 @@ def strip_thinking_tags(text: str) -> str:
 def extract_json(text: str) -> dict | list | None:
     """Extract the first JSON object or array from raw LLM text.
 
-    Handles markdown fences, trailing prose, control characters, and Qwen3.6 thinking tags.
+    Handles markdown fences, trailing prose, control characters, trailing commas, and Qwen3.6 thinking tags.
     Returns None if no valid JSON found.
     """
     if not text:
         return None
     
+    import re
+
     # Strip Qwen3.6 thinking tags first
     text = strip_thinking_tags(text)
-    
-    # Pre-clean: strip whitespace
     text = text.strip()
 
-    # Find first structural char
+    # Strategy 1: Check for markdown code blocks (```json ... ``` or ``` ... ```)
+    code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if code_block_match:
+        block_text = code_block_match.group(1).strip()
+        try:
+            return json.loads(block_text, strict=False)
+        except json.JSONDecodeError:
+            # Try cleaning trailing commas
+            cleaned_block = re.sub(r",\s*([\]}])", r"\1", block_text)
+            try:
+                return json.loads(cleaned_block, strict=False)
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 2: Find outermost structural boundaries
     start_idx = -1
     for ch in ("[", "{"):
         idx = text.find(ch)
         if idx != -1 and (start_idx == -1 or idx < start_idx):
             start_idx = idx
 
-    # Find last matching char
     end_idx = -1
     for ch in ("]", "}"):
         idx = text.rfind(ch)
         if idx != -1 and idx > end_idx:
             end_idx = idx
 
-    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
-        # Fallback to direct load if no markers found but text looks like JSON
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        candidate = text[start_idx : end_idx + 1]
         try:
-            return json.loads(text, strict=False)
+            return json.loads(candidate, strict=False)
         except json.JSONDecodeError:
-            return None
+            # Try cleaning trailing commas
+            cleaned = re.sub(r",\s*([\]}])", r"\1", candidate)
+            try:
+                return json.loads(cleaned, strict=False)
+            except json.JSONDecodeError:
+                pass
 
-    candidate = text[start_idx : end_idx + 1]
-
+    # Strategy 3: Direct fallback load
     try:
-        return json.loads(candidate, strict=False)
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
-        # If widest boundary fails, maybe there's garbage between blocks?
-        # For now, we stick to widest as per instructions.
         return None
 
 

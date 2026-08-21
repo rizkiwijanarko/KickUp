@@ -106,9 +106,13 @@ class VentureForgeState(BaseModel):
     @computed_field
     @property
     def top_scored_ideas(self) -> list[ScoredIdea]:
-        """Ideas sorted by yes_count desc, limited to top_n_pitches."""
+        """Ideas with verdict 'pursue' sorted by yes_count desc, limited to top_n_pitches.
+
+        If no ideas achieve 'pursue', returns empty list to trigger idea generator revision.
+        """
+        pursue_ideas = [s for s in self.scored_ideas if s.verdict == "pursue"]
         ranked = sorted(
-            self.scored_ideas,
+            pursue_ideas,
             key=lambda s: (s.yes_count, s.rank or 0),
             reverse=True,
         )
@@ -117,8 +121,10 @@ class VentureForgeState(BaseModel):
     @computed_field
     @property
     def can_revise(self) -> bool:
-        """True if the current critique can still trigger revision."""
+        """True if the current critique or reflection can still trigger revision."""
         if self.critique is None:
+            if self.revision_counts:
+                return max(self.revision_counts.values()) < self.max_revisions
             return True
 
         if self.critique.target_agent == "pain_point_miner":
@@ -316,7 +322,15 @@ class VentureForgeState(BaseModel):
         }
 
         if target == "pain_point_miner":
-            updates.update({"critique": None})
+            # Strict downstream invalidation cascade: re-mining pain points invalidates all downstream ideas
+            updates.update({
+                "pain_points": [],
+                "ideas": [],
+                "scored_ideas": [],
+                "pitch_briefs": [],
+                "critique": None,
+                "current_critique_index": 0,
+            })
         elif target == "idea_generator":
             filtered_ideas = [i for i in self.ideas if i.id != idea_id]
             filtered_scored = [s for s in self.scored_ideas if s.idea_id != idea_id]

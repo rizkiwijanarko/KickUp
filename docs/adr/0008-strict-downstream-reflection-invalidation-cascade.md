@@ -1,0 +1,3 @@
+# Strict Downstream Reflection Invalidation Cascade
+
+When the Critic routes a revision request to an upstream agent like `pain_point_miner`, resetting only the critique pointer left downstream `ideas`, `scored_ideas`, and `pitch_briefs` populated. The orchestrator's stage predicates would detect existing ideas, bypass re-generation, and evaluate stale pitch briefs against newly mined evidence. We decided to enforce a strict Downstream Invalidation Cascade: when `target_agent == "pain_point_miner"`, all downstream `ideas`, `scored_ideas`, and `pitch_briefs` are cleared so the pipeline naturally re-synthesizes ideas from fresh evidence.

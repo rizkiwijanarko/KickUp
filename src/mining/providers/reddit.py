@@ -27,8 +27,14 @@ class RedditProvider:
         return DataSource.REDDIT
 
     def is_available(self) -> bool:
-        """Check if Reddit API credentials are configured."""
-        return bool(settings.reddit_client_id and settings.reddit_client_secret)
+        """Check if Reddit API credentials are configured with valid non-placeholder values."""
+        client_id = settings.reddit_client_id
+        client_secret = settings.reddit_client_secret
+        if not client_id or not client_secret:
+            return False
+        if client_id.startswith("your_") or client_secret.startswith("your_"):
+            return False
+        return True
 
     def fetch(self, domain: str, limit: int = 50) -> list[RawEvidence]:
         """Fetch pain point comments from Reddit."""
@@ -37,7 +43,7 @@ class RedditProvider:
             return []
 
         try:
-            comments = scrape_domain(domain, max_total_comments=limit)
+            comments = scrape_for_domain(domain, max_total_comments=limit)
             results: list[RawEvidence] = []
             for c in comments:
                 results.append(

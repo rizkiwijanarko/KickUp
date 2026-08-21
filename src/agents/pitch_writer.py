@@ -70,6 +70,9 @@ def get_target_ideas(state: VentureForgeState) -> List[Any]:
         if target_scored:
             return [target_scored]
 
+    if not state.top_scored_ideas and state.scored_ideas:
+        return [max(state.scored_ideas, key=lambda s: s.yes_count)]
+
     return state.top_scored_ideas
 
 
@@ -118,7 +121,7 @@ def serialize_pain_point(pain_point: Any, max_evidence: int = 2) -> Dict[str, An
             {
                 "source_url": ev.source_url,
                 "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
-                "source": ev.source.value,
+                "source": ev.source.value if hasattr(ev.source, "value") else str(ev.source),
             }
             for ev in pain_point.evidence[:max_evidence]
         ],

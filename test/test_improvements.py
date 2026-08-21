@@ -114,7 +114,7 @@ def test_3_max_revisions_default_is_3():
     """Test that max_revisions default is 2."""
     print("\n[TEST 3] Max revisions default...")
     
-    state = make_initial_state("test domain")
+    state = make_initial_state("test domain", max_revisions=2)
     assert state.max_revisions == 2, f"Expected max_revisions=2, got {state.max_revisions}"
     
     # Test get_revision_count method

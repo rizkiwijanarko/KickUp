@@ -122,7 +122,37 @@ def orchestrator(state: VentureForgeState) -> dict[str, Any]:
             "next_node": "scorer",
         }
 
-    # 4. Pitch writing
+    # 4. Scorer Reflection or Pitch writing
+    if state.scored_ideas and not state.top_scored_ideas and not state.pitch_briefs:
+        if state.can_revise:
+            logger.warning("[orchestrator] All generated ideas were parked by Scorer. Routing revision to idea_generator.")
+            return {
+                "ideas": [],
+                "scored_ideas": [],
+                "pitch_briefs": [],
+                "current_stage": PipelineStage.REVISING,
+                "next_node": "idea_generator",
+                "revision_feedback": "All previously generated ideas were parked due to fatal flaws or failing rubrics. Generate fresh ideas exploring alternative angles.",
+                **state.add_event(
+                    agent="orchestrator",
+                    stage=PipelineStage.REVISING,
+                    kind="warning",
+                    message="All ideas parked by Scorer. Requesting new ideas from idea_generator.",
+                ),
+            }
+        else:
+            logger.warning("[orchestrator] All ideas parked by Scorer and max revisions reached. Graduating best candidate to pitch_writer.")
+            return {
+                "current_stage": PipelineStage.WRITING,
+                "next_node": "pitch_writer",
+                **state.add_event(
+                    agent="orchestrator",
+                    stage=PipelineStage.WRITING,
+                    kind="info",
+                    message="Max revisions reached. Graduating best-effort candidate to pitch_writer.",
+                ),
+            }
+
     if should_write_pitches(state):
         if not state.scored_ideas:
             return state.mark_failed(ERROR_NO_SCORED_IDEAS)

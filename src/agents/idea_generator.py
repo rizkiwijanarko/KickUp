@@ -76,7 +76,7 @@ def serialize_pain_point_for_ideas(pain_point: Any) -> Dict[str, Any]:
             {
                 "source_url": ev.source_url,
                 "raw_quote": ev.raw_quote,
-                "source": ev.source.value,
+                "source": ev.source.value if hasattr(ev.source, "value") else str(ev.source),
             }
             for ev in pain_point.evidence
         ],
@@ -222,7 +222,7 @@ def build_user_prompt_single(
                 {
                     "source_url": ev.source_url,
                     "raw_quote": ev.raw_quote[:300],  # Truncate long quotes
-                    "source": ev.source.value,
+                    "source": ev.source.value if hasattr(ev.source, "value") else str(ev.source),
                 }
                 for ev in pp.evidence[:2]  # Only top 2 evidence items
             ],
@@ -469,7 +469,7 @@ def validate_pain_point_references(
         valid_pain_point_ids: Set of valid pain point UUIDs
 
     Returns:
-        True if all references are valid, False otherwise
+        True if at least one valid reference exists, False otherwise
     """
     addresses_ids = idea_dict.get("addresses_pain_point_ids", [])
 
@@ -481,19 +481,18 @@ def validate_pain_point_references(
         return False
 
     # Convert to UUIDs and check validity
-    try:
-        referenced_ids = {UUID(str(pid)) for pid in addresses_ids}
-    except (ValueError, TypeError) as e:
-        logger.debug(
-            f"[idea_generator] Invalid UUID in addresses_pain_point_ids: {e}"
-        )
-        return False
+    referenced_ids: set[UUID] = set()
+    for pid in addresses_ids:
+        try:
+            referenced_ids.add(UUID(str(pid)))
+        except (ValueError, TypeError):
+            continue
 
-    invalid_refs = referenced_ids - valid_pain_point_ids
-    if invalid_refs:
+    valid_refs = referenced_ids & valid_pain_point_ids
+    if not valid_refs:
         logger.debug(
             f"[idea_generator] Idea '{idea_dict.get('title', 'unknown')}' "
-            f"references invalid pain point IDs: {invalid_refs}"
+            f"references no valid pain point IDs: {referenced_ids}"
         )
         return False
 
@@ -521,10 +520,15 @@ def convert_to_idea(
         return None
 
     # Check minimum reference count
-    addresses_ids = [
-        UUID(str(pid)) for pid in idea_dict.get("addresses_pain_point_ids", [])
-    ]
-    resolved = [uid for uid in addresses_ids if uid in valid_pain_point_ids]
+    addresses_ids = idea_dict.get("addresses_pain_point_ids", [])
+    resolved: list[UUID] = []
+    for pid in addresses_ids:
+        try:
+            uid = UUID(str(pid))
+            if uid in valid_pain_point_ids and uid not in resolved:
+                resolved.append(uid)
+        except (ValueError, TypeError):
+            continue
 
     if len(resolved) < min_refs:
         logger.debug(

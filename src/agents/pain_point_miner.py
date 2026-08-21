@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -34,16 +34,16 @@ from src.state.graph_state import VentureForgeState
 logger = logging.getLogger(__name__)
 
 
-def serialize_evidence(evidence: list[RawEvidence]) -> list[dict[str, str]]:
+def serialize_evidence(evidence: list[RawEvidence], limit: int = 20) -> list[dict[str, str]]:
     """Serialize evidence items to compact dict format for LLM prompt."""
     return [
         {
             "text": item.text[:COMMENT_TEXT_MAX_LENGTH],
             "url": item.url,
-            "source": item.source.value,
+            "source": item.source.value if hasattr(item.source, "value") else str(item.source),
             "post_title": item.title[:POST_TITLE_MAX_LENGTH] if item.title else "",
         }
-        for item in evidence
+        for item in evidence[:limit]
     ]
 
 
@@ -169,6 +169,17 @@ def convert_to_pain_points(raw_items: list[dict[str, Any]]) -> list[PainPoint]:
                     )
                 )
 
+            raw_id = item.get("id")
+            if isinstance(raw_id, UUID):
+                pp_id = raw_id
+            elif isinstance(raw_id, str) and len(raw_id) == 36:
+                try:
+                    pp_id = UUID(raw_id)
+                except ValueError:
+                    pp_id = uuid4()
+            else:
+                pp_id = uuid4()
+
             rubric_dict = coerce_rubric_bools(item.get("rubric", {}))
             rubric = PainPointRubric(
                 is_genuine_current_frustration=rubric_dict.get("is_genuine_current_frustration", True),
@@ -177,7 +188,7 @@ def convert_to_pain_points(raw_items: list[dict[str, Any]]) -> list[PainPoint]:
             )
 
             pp = PainPoint(
-                id=item.get("id") or uuid4(),
+                id=pp_id,
                 title=item["title"],
                 description=item["description"],
                 rubric=rubric,
@@ -186,7 +197,7 @@ def convert_to_pain_points(raw_items: list[dict[str, Any]]) -> list[PainPoint]:
             )
             pain_points.append(pp)
         except Exception as e:
-            logger.debug(f"[pain_point_miner] Skipping malformed item: {e}")
+            logger.warning(f"[pain_point_miner] Skipping malformed item: {e}")
 
     return pain_points
 

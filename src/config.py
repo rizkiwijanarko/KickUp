@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     # TODO: Increase back to 5 once server --max-tokens is increased to 16384
     ideas_per_run: int = Field(default=2, ge=1, le=20)
     top_n_pitches: int = Field(default=3, ge=1, le=10)
-    max_revisions: int = Field(default=2, ge=0, le=5)
+    max_revisions: int = Field(default=1, ge=0, le=5)
     lookback_days: int = Field(default=90, ge=7, le=365)
 
     # ------------------------------------------------------------------

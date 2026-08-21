@@ -77,10 +77,12 @@ class PitchBrief(BaseModel):
     markdown_content: str = Field(..., min_length=100)
     revision_count: int = Field(default=0, ge=0, le=2)
 
-    @field_validator("tagline")
+    @field_validator("tagline", mode="before")
     @classmethod
-    def validate_tagline_word_count(cls, v: str) -> str:
-        word_count = len(v.split())
-        if word_count > 12:
-            raise ValueError(f"Tagline must be under 12 words (got {word_count})")
+    def validate_tagline_word_count(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            v = str(v)
+        words = v.strip().split()
+        if len(words) > 12:
+            return " ".join(words[:12])
         return v

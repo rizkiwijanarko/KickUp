@@ -10,7 +10,7 @@ All magic numbers, thresholds, and limits are defined here.
 # =============================================================================
 
 # Maximum number of pain points to extract per domain
-MAX_PAIN_POINTS_DEFAULT = 30
+MAX_PAIN_POINTS_DEFAULT = 5
 
 # Maximum number of ideas to generate per run
 MAX_IDEAS_PER_RUN_DEFAULT = 5

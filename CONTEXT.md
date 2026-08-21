@@ -47,3 +47,15 @@ _Avoid_: Failed pitch, rejected brief, broken pitch
 **Ingestion SLA Budget**:
 The maximum bounded time window (default: 5.0 seconds) allocated for concurrent source providers to return evidence before mining synthesis proceeds.
 _Avoid_: Scrape timeout, network wait limit
+
+**Downstream Invalidation Cascade**:
+The protocol ensuring that reflection feedback routed to an upstream worker agent (e.g. Pain Point Miner) automatically invalidates downstream artifacts (Ideas, Scored Ideas, Pitch Briefs) to prevent stale state propagation.
+_Avoid_: Hard reset, wipeout, pipeline flush
+
+**Pursue-First Filtering**:
+The scoring constraint requiring pitch briefs to be authored only for ideas receiving a 'pursue' verdict (no fatal flaws and passing demand/feasibility rubrics), triggering an idea generator reflection if 0 ideas qualify.
+_Avoid_: Top scoring filter, greedy selection
+
+**Synthetic Evidence Mode**:
+The resiliency fallback mechanism that synthesizes plausible grounded domain evidence when external scrapers and APIs are unavailable or rate-limited.
+_Avoid_: Fake data mode, dummy mode, offline stub

@@ -1,0 +1,3 @@
+# Pursue-First Filtering and Scorer Reflection Trigger
+
+Selecting top-scored ideas purely by sorting on `yes_count` allowed ideas with `verdict == "park"` (such as those with fatal platform risks or unviable unit economics) to proceed to pitch authoring if all generated ideas scored poorly. We decided to enforce Pursue-First Filtering in `state.top_scored_ideas`, selecting exclusively ideas with `verdict == "pursue"`. If 0 ideas achieve a pursue verdict, the orchestrator triggers an automatic reflection loop back to `idea_generator` with diagnostic feedback rather than wasting LLM tokens writing pitches for unviable concepts.

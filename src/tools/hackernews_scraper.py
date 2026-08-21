@@ -30,7 +30,7 @@ _MISSING = object()
 # ------------------------------------------------------------------
 _BASE_URL = "https://hn.algolia.com/api/v1"
 _REQUEST_DELAY_S: float = 0.3
-_REQUEST_TIMEOUT: int = 15
+_REQUEST_TIMEOUT: int = 5
 _MAX_RESULTS_PER_QUERY: int = 50
 _MIN_COMMENT_LENGTH: int = 40
 
